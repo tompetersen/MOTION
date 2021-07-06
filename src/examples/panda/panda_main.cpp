@@ -59,10 +59,10 @@ int main(int ac, char* av[]) {
 
   std::cout << "Created party..." << std::flush;
 
-  uint32_t input = 2;
+  std::vector<uint32_t> inputs{{2, 4, 6}};
   uint32_t k = 5;
 
-  EvaluateProtocol(party, input, k);
+  EvaluateProtocol(party, inputs, k);
 
   std::cout << "Finished!" << std::flush;
 

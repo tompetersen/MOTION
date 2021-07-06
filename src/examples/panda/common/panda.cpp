@@ -39,51 +39,71 @@
 namespace mo = encrypto::motion;
 
 
-void EvaluateProtocol(encrypto::motion::PartyPointer& party, std::uint32_t value, std::uint32_t kValue) {
+void EvaluateProtocol(encrypto::motion::PartyPointer& party, std::vector<std::uint32_t> values, std::uint32_t kValue) {
   // heavily inspired by millionaires problem
   
-  std::cout << "Starting eval..." << std::flush;
+  std::cout << "Starting eval..." << std::endl;
 
   const std::size_t number_of_parties{party->GetConfiguration()->GetNumOfParties()};
+  const std::size_t number_of_inputs{values.size()};
+
+
+  std::cout << "Before input_values init (parties: " << number_of_parties << ", values: " << number_of_inputs << ")..." << std::endl;
 
   // (pre-)allocate indices and input values
-  std::vector<mo::SecureUnsignedInteger> input_values(number_of_parties);
+  std::vector<std::vector<mo::SecureUnsignedInteger>> input_values(number_of_parties);
 
   // share inputs
   // remark: the input values to other parties' input gates are considered as buffers
   // and the values are simply ignored and overwritten later
   for (std::size_t i = 0; i < number_of_parties; ++i) {
-    input_values[i] = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(value), i);
+    std::vector<mo::SecureUnsignedInteger> tmp(number_of_inputs);
+    for (std::size_t j = 0; j < number_of_inputs; ++j) {
+      tmp[j] = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(values[j]), i);
+    }
+    input_values[i] = tmp;
   }
-  
+
   // we might introduce central party which inputs k?
   mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
-  mo::SecureUnsignedInteger sum{input_values[0]};
-
-  for (std::size_t i = 1; i != input_values.size(); ++i) {
-    sum += input_values[i];
-    // TODO DD: maybe tree-like addition?
+ 
+  std::vector<mo::SecureUnsignedInteger> sums(number_of_inputs);
+  for (std::size_t j = 0; j < number_of_inputs; ++j) {
+    sums[j] = input_values[0][j];
   }
 
-  auto comparison = sum > secureK;
+  for (std::size_t i = 1; i != input_values.size(); ++i) {
+    for (std::size_t j = 0; j < number_of_inputs; ++j) {
+      sums[j] += input_values[i][j];
+      // TODO DD: maybe tree-like addition?
+    }
+  }
+
+  std::vector<mo::ShareWrapper> comparisons(number_of_inputs);
+
+  for (std::size_t j = 0; j < number_of_inputs; ++j) {
+    comparisons[j] = sums[j] > secureK;
+  }
 
 //  mo::ShareWrapper& temp{sum.Get()};
 //  auto output = temp.Out();
 
-  auto output = comparison.Out();
+  std::vector<mo::ShareWrapper> outputs(number_of_inputs);
+  for (std::size_t j = 0; j < number_of_inputs; ++j) {
+    outputs[j] = comparisons[j].Out();
+  }
  
-  std::cout << "Running eval..." << std::flush;
+  std::cout << "Running eval..." << std::endl;
 
   party->Run();
   party->Finish();
 
-  std::cout << "Finished run..." << std::flush;
+  std::cout << "Finished run..." << std::endl;
 
-  // retrieve the result in binary form
-  auto binary_output{output.As<bool>()};
-  // convert the binary result to integer
-  // auto result = mo::ToOutput<uint8_t>(binary_output);
-  auto result = binary_output;
-  // print the result into the terminal
-  std::cout << "Final sum: " << result  << std::flush;
+  for (std::size_t j = 0; j < number_of_inputs; ++j) {
+    // retrieve the result in boolean form
+    auto result{outputs[j].As<bool>()};
+    // print the result into the terminal
+    std::cout << "Final sum: " << result  << std::endl;
+  }
 }

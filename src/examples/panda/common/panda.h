@@ -26,4 +26,4 @@
 
 #include "base/party.h"
 
-void EvaluateProtocol(encrypto::motion::PartyPointer& party, std::uint32_t value, std::uint32_t kValue);
+void EvaluateProtocol(encrypto::motion::PartyPointer& party, std::vector<std::uint32_t> values, std::uint32_t kValue);
