@@ -5,3 +5,5 @@ add_subdirectory(benchmark_providers)
 add_subdirectory(example_template)
 add_subdirectory(sha256)
 add_subdirectory(millionaires_problem)
+add_subdirectory(panda)
+
