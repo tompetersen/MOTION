@@ -59,7 +59,7 @@ int main(int ac, char* av[]) {
 
   std::cout << "Created party..." << std::flush;
 
-  uint32_t input = 17;
+  uint32_t input = 2;
   uint32_t k = 5;
 
   EvaluateProtocol(party, input, k);

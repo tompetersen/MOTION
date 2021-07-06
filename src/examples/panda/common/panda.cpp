@@ -56,9 +56,8 @@ void EvaluateProtocol(encrypto::motion::PartyPointer& party, std::uint32_t value
     input_values[i] = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(value), i);
   }
   
-  // this does not work - "Invalid input owner: 2 of 2"
-  // I guess we might introduce central party which inputs k?
-  // mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), number_of_parties);
+  // we might introduce central party which inputs k?
+  mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
   mo::SecureUnsignedInteger sum{input_values[0]};
 
   for (std::size_t i = 1; i != input_values.size(); ++i) {
@@ -66,10 +65,12 @@ void EvaluateProtocol(encrypto::motion::PartyPointer& party, std::uint32_t value
     // TODO DD: maybe tree-like addition?
   }
 
-//  auto comparison = sum > secureK;
+  auto comparison = sum > secureK;
 
-  mo::ShareWrapper& temp{sum.Get()};
-  auto output = temp.Out();
+//  mo::ShareWrapper& temp{sum.Get()};
+//  auto output = temp.Out();
+
+  auto output = comparison.Out();
  
   std::cout << "Running eval..." << std::flush;
 
@@ -79,9 +80,10 @@ void EvaluateProtocol(encrypto::motion::PartyPointer& party, std::uint32_t value
   std::cout << "Finished run..." << std::flush;
 
   // retrieve the result in binary form
-  auto binary_output{output.As<std::vector<mo::BitVector<>>>()};
+  auto binary_output{output.As<bool>()};
   // convert the binary result to integer
-  auto result = mo::ToOutput<std::uint32_t>(binary_output);
+  // auto result = mo::ToOutput<uint8_t>(binary_output);
+  auto result = binary_output;
   // print the result into the terminal
   std::cout << "Final sum: " << result  << std::flush;
 }
