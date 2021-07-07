@@ -39,14 +39,13 @@
 namespace mo = encrypto::motion;
 
 
-void EvaluateProtocol(encrypto::motion::PartyPointer& party, std::vector<std::uint32_t> values, std::uint32_t kValue) {
+std::vector<bool> EvaluateProtocol(encrypto::motion::PartyPointer& party, std::vector<std::uint32_t> values, std::uint32_t kValue) {
   // heavily inspired by millionaires problem
   
   std::cout << "Starting eval..." << std::endl;
 
   const std::size_t number_of_parties{party->GetConfiguration()->GetNumOfParties()};
   const std::size_t number_of_inputs{values.size()};
-
 
   std::cout << "Before input_values init (parties: " << number_of_parties << ", values: " << number_of_inputs << ")..." << std::endl;
 
@@ -98,12 +97,16 @@ void EvaluateProtocol(encrypto::motion::PartyPointer& party, std::vector<std::ui
   party->Run();
   party->Finish();
 
-  std::cout << "Finished run..." << std::endl;
+  std::cout << "Finished run. Results: " << std::endl;
 
+  std::vector<bool> results(number_of_inputs);
   for (std::size_t j = 0; j < number_of_inputs; ++j) {
     // retrieve the result in boolean form
     auto result{outputs[j].As<bool>()};
-    // print the result into the terminal
-    std::cout << "Final sum: " << result  << std::endl;
+    results[j] = result;
+
+    std::cout << " " << result;
   }
+
+  return results;
 }
