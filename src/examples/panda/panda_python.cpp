@@ -46,7 +46,7 @@
 // encrypto::motion::PartyPointer CreateParty(const program_options::variables_map& user_options);
 // 
 std::vector<bool> perform(std::vector<std::tuple<std::size_t, std::string, std::uint16_t>> parties, std::size_t my_id, std::vector<uint32_t> inputs, uint32_t k) {
-  const auto number_of_parties{parties_string.size()};
+  const auto number_of_parties{parties.size()};
   
   if (my_id >= number_of_parties) {
     throw std::runtime_error(fmt::format(
@@ -57,9 +57,9 @@ std::vector<bool> perform(std::vector<std::tuple<std::size_t, std::string, std::
   encrypto::motion::communication::TcpPartiesConfiguration parties_configuration(number_of_parties);
 
   for (const auto party : parties) {
-    const auto party_id = std::get<0>party;
-    const auto host = std::get<1>party;
-    const auto port = std::get<2>party;
+    const std::size_t party_id = std::get<0>(party);
+    const std::string host = std::get<1>(party);
+    const std::uint16_t port = std::get<2>(party);
     if (party_id >= number_of_parties) {
       throw std::runtime_error(
           fmt::format("Party's id needs to be in the range [0, #parties - 1], current id "
