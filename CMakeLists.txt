@@ -15,6 +15,7 @@ option(MOTION_BUILD_DOC "Build documentation" OFF)
 set(MOTION_USE_AVX OFF CACHE STRING "Use AVX/AVX2/AVX512/AVX512VAES instructions")
 set_property(CACHE MOTION_USE_AVX PROPERTY STRINGS OFF AVX AVX2 AVX512 AVX512VAES)
 
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
@@ -137,6 +138,7 @@ if (MOTION_BUILD_TESTS)
 endif (MOTION_BUILD_TESTS)
 
 if (MOTION_BUILD_EXE)
+    add_subdirectory(${PROJECT_SOURCE_DIR}/extern/pybind11)
     add_subdirectory(src/examples)
 endif (MOTION_BUILD_EXE)
 
