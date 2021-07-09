@@ -1,6 +1,6 @@
 add_executable(panda panda_main.cpp common/panda.cpp)
 
-pybind11_add_module(pandapython panda_python.cpp)
+pybind11_add_module(pandapython panda_python.cpp common/panda.cpp)
 
 if (NOT MOTION_BUILD_BOOST_FROM_SOURCES)
     find_package(Boost
