@@ -29,7 +29,7 @@ ExternalProject_Add(external_boost
         --with-libraries=context,fiber,log,filesystem,system,thread,program_options
         --prefix=<INSTALL_DIR>
         BUILD_COMMAND
-        env -u CPATH -u C_INCLUDE_PATH ./b2 install link=static variant=${Boost_BUILD_TYPE} ${Boost_SANITIZER_FLAGS} threading=multi -j 10 define=BOOST_LOG_USE_NATIVE_SYSLOG define=BOOST_ERROR_CODE_HEADER_ONLY
+        env -u CPATH -u C_INCLUDE_PATH ./b2 cxxflags='-fPIC' install link=static variant=${Boost_BUILD_TYPE} ${Boost_SANITIZER_FLAGS} threading=multi -j 10 define=BOOST_LOG_USE_NATIVE_SYSLOG define=BOOST_ERROR_CODE_HEADER_ONLY
         INSTALL_COMMAND ""
         INSTALL_DIR ${Boost_INSTALL}
         SOURCE_DIR ${Boost_INCLUDE_DIRS})
