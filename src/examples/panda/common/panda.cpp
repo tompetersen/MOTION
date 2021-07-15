@@ -39,7 +39,7 @@
 namespace mo = encrypto::motion;
 
 
-std::vector<bool> EvaluateProtocol(encrypto::motion::PartyPointer& party, std::vector<std::uint32_t> values, std::uint32_t kValue) {
+std::vector<uint32_t> EvaluateProtocol(encrypto::motion::PartyPointer& party, std::vector<std::uint32_t> values, std::uint32_t kValue) {
   // heavily inspired by millionaires problem
   
   std::cout << "Starting eval..." << std::endl;
@@ -65,6 +65,9 @@ std::vector<bool> EvaluateProtocol(encrypto::motion::PartyPointer& party, std::v
 
   // we might introduce central party which inputs k?
   mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
+  // we mask sums smaller than k with 0, leaking no info
+  uint32_t mask = 0;
+  mo::SecureUnsignedInteger secureMask = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(mask), 0);
  
   std::vector<mo::SecureUnsignedInteger> sums(number_of_inputs);
   for (std::size_t j = 0; j < number_of_inputs; ++j) {
@@ -81,7 +84,8 @@ std::vector<bool> EvaluateProtocol(encrypto::motion::PartyPointer& party, std::v
   std::vector<mo::ShareWrapper> comparisons(number_of_inputs);
 
   for (std::size_t j = 0; j < number_of_inputs; ++j) {
-    comparisons[j] = sums[j] > secureK;
+    mo::ShareWrapper comparison = secureK > sums[j];
+    comparisons[j] = comparison.Mux(secureMask.Get(), sums[j].Get());
   }
 
 //  mo::ShareWrapper& temp{sum.Get()};
@@ -99,10 +103,12 @@ std::vector<bool> EvaluateProtocol(encrypto::motion::PartyPointer& party, std::v
 
   std::cout << "Finished run. Results: " << std::endl;
 
-  std::vector<bool> results(number_of_inputs);
+  std::vector<uint32_t> results(number_of_inputs);
   for (std::size_t j = 0; j < number_of_inputs; ++j) {
     // retrieve the result in boolean form
-    auto result{outputs[j].As<bool>()};
+    auto binary_output{outputs[j].As<std::vector<mo::BitVector<>>>()};
+    // convert the binary result to integer
+    auto result = mo::ToOutput<std::uint32_t>(binary_output);
     results[j] = result;
 
     std::cout << " " << result;
@@ -110,3 +116,4 @@ std::vector<bool> EvaluateProtocol(encrypto::motion::PartyPointer& party, std::v
 
   return results;
 }
+

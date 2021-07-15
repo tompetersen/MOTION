@@ -41,7 +41,7 @@
 
 namespace py = pybind11;
 
-std::vector<bool> perform(std::vector<std::tuple<std::size_t, std::string, std::uint16_t>> parties, std::size_t my_id, std::vector<uint32_t> inputs, uint32_t k) {
+std::vector<uint32_t> perform(std::vector<std::tuple<std::size_t, std::string, std::uint16_t>> parties, std::size_t my_id, std::vector<uint32_t> inputs, uint32_t k) {
   const auto number_of_parties{parties.size()};
   
   if (my_id >= number_of_parties) {
