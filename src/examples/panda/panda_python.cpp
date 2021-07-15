@@ -78,10 +78,17 @@ std::vector<uint32_t> perform(std::vector<std::tuple<std::size_t, std::string, s
 }
 
 
+uint32_t getZeroMaskValue() {
+  return GetZeroMaskValue();
+}
+
+
 PYBIND11_MODULE(pandapython, m) {
     m.doc() = "pybind11 example plugin"; // optional module docstring
 
     m.def("perform", &perform, "Perform parallel sum>k mpc protocol",
     py::arg("parties"), py::arg("my_id"), py::arg("my_inputs"), py::arg("k"));
+
+    m.def("get_zero_mask_value", &getZeroMaskValue, "The value a zero sum is masked with... for internal reasons -,-");
 }
 

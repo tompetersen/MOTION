@@ -65,9 +65,12 @@ std::vector<uint32_t> EvaluateProtocol(encrypto::motion::PartyPointer& party, st
 
   // we might introduce central party which inputs k?
   mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
+  // we mask sums equal to 0 with MAX to distinguish the cases 0, < k and >= k
+  uint32_t zeroMask = GetZeroMaskValue();
+  mo::SecureUnsignedInteger secureZeroMask = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zeroMask), 0);
   // we mask sums smaller than k with 0, leaking no info
-  uint32_t mask = 0;
-  mo::SecureUnsignedInteger secureMask = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(mask), 0);
+  uint32_t zero = 0;
+  mo::SecureUnsignedInteger secureZero = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zero), 0);
  
   std::vector<mo::SecureUnsignedInteger> sums(number_of_inputs);
   for (std::size_t j = 0; j < number_of_inputs; ++j) {
@@ -84,8 +87,10 @@ std::vector<uint32_t> EvaluateProtocol(encrypto::motion::PartyPointer& party, st
   std::vector<mo::ShareWrapper> comparisons(number_of_inputs);
 
   for (std::size_t j = 0; j < number_of_inputs; ++j) {
-    mo::ShareWrapper comparison = secureK > sums[j];
-    comparisons[j] = comparison.Mux(secureMask.Get(), sums[j].Get());
+    mo::ShareWrapper comparison1 = sums[j] == secureZero;
+    comparisons[j] = comparison1.Mux(secureZeroMask.Get(), sums[j].Get());
+    mo::ShareWrapper comparison2 = secureK > comparisons[j];
+    comparisons[j] = comparison2.Mux(secureZero.Get(), comparisons[j].Get());
   }
 
 //  mo::ShareWrapper& temp{sum.Get()};
@@ -117,3 +122,14 @@ std::vector<uint32_t> EvaluateProtocol(encrypto::motion::PartyPointer& party, st
   return results;
 }
 
+
+uint32_t GetZeroMaskValue() {
+    //TODO There seems to be a bug in MOTION
+    // cmp = uint32_t.max() > 5 
+    // cmp.mux(a, b) 
+    //   -> b
+    // Therefore we use a slightly smaller value here, which should be large
+    // enough to never occur in practice anyway.
+
+    return std::numeric_limits<uint32_t>::max() / 4;
+}

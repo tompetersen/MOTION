@@ -27,3 +27,5 @@
 #include "base/party.h"
 
 std::vector<uint32_t> EvaluateProtocol(encrypto::motion::PartyPointer& party, std::vector<std::uint32_t> values, std::uint32_t kValue);
+
+std::uint32_t GetZeroMaskValue();
