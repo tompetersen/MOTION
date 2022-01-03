@@ -28,4 +28,10 @@
 
 std::vector<uint32_t> EvaluateProtocol(encrypto::motion::PartyPointer& party, std::vector<std::uint32_t> values, std::uint32_t kValue);
 
+std::vector<uint32_t> EvaluateProtocolBasic(encrypto::motion::PartyPointer& party, std::vector<std::uint32_t> values, std::uint32_t kValue);
+
+std::vector<uint32_t> EvaluateProtocolTreeAddition(encrypto::motion::PartyPointer& party, std::vector<std::uint32_t> values, std::uint32_t kValue);
+
+std::vector<uint32_t> EvaluateProtocolArithmeticThenBool(encrypto::motion::PartyPointer& party, std::vector<std::uint32_t> values, std::uint32_t kValue);
+
 std::uint32_t GetZeroMaskValue();

@@ -41,7 +41,8 @@
 
 namespace py = pybind11;
 
-std::vector<uint32_t> perform(std::vector<std::tuple<std::size_t, std::string, std::uint16_t>> parties, std::size_t my_id, std::vector<uint32_t> inputs, uint32_t k) {
+
+std::vector<uint32_t> perform(std::vector<std::tuple<std::size_t, std::string, std::uint16_t>> parties, std::size_t my_id, std::vector<uint32_t> inputs, uint32_t k, uint32_t variant) {
   const auto number_of_parties{parties.size()};
   
   if (my_id >= number_of_parties) {
@@ -70,13 +71,33 @@ std::vector<uint32_t> perform(std::vector<std::tuple<std::size_t, std::string, s
       my_id, helper.SetupConnections());
   auto party = std::make_unique<encrypto::motion::Party>(std::move(communication_layer));
   auto configuration = party->GetConfiguration();
-  configuration->SetLoggingEnabled(false);
+  configuration->SetLoggingEnabled(true);
 
-  auto results = EvaluateProtocol(party, inputs, k);
-
-  return results;
+  // different circuits for comparison
+  if (variant == 1) {
+    return EvaluateProtocolBasic(party, inputs, k);
+  }
+  else if (variant == 2) {
+    return EvaluateProtocolTreeAddition(party, inputs, k);
+  }
+  else if (variant == 3) {
+    return EvaluateProtocolArithmeticThenBool(party, inputs, k);
+  }
 }
 
+
+std::vector<uint32_t> performBasic(std::vector<std::tuple<std::size_t, std::string, std::uint16_t>> parties, std::size_t my_id, std::vector<uint32_t> inputs, uint32_t k) {
+  return perform(parties, my_id, inputs, k, 1);
+}
+
+
+std::vector<uint32_t> performTreeSum(std::vector<std::tuple<std::size_t, std::string, std::uint16_t>> parties, std::size_t my_id, std::vector<uint32_t> inputs, uint32_t k) {
+  return perform(parties, my_id, inputs, k, 2);
+}
+
+std::vector<uint32_t> performArithmeticThenBool(std::vector<std::tuple<std::size_t, std::string, std::uint16_t>> parties, std::size_t my_id, std::vector<uint32_t> inputs, uint32_t k) {
+  return perform(parties, my_id, inputs, k, 3);
+}
 
 uint32_t getZeroMaskValue() {
   return GetZeroMaskValue();
@@ -86,8 +107,11 @@ uint32_t getZeroMaskValue() {
 PYBIND11_MODULE(pandapython, m) {
     m.doc() = "pybind11 example plugin"; // optional module docstring
 
-    m.def("perform", &perform, "Perform parallel sum>k mpc protocol",
-    py::arg("parties"), py::arg("my_id"), py::arg("my_inputs"), py::arg("k"));
+    m.def("perform_basic", &performBasic, "Perform parallel sum>k mpc protocol", py::arg("parties"), py::arg("my_id"), py::arg("my_inputs"), py::arg("k"));
+    
+    m.def("perform_tree_sum", &performTreeSum, "Perform parallel sum>k mpc protocol", py::arg("parties"), py::arg("my_id"), py::arg("my_inputs"), py::arg("k"));
+    
+    m.def("perform_arithmetic_then_bool", &performArithmeticThenBool, "Perform parallel sum>k mpc protocol", py::arg("parties"), py::arg("my_id"), py::arg("my_inputs"), py::arg("k"));
 
     m.def("get_zero_mask_value", &getZeroMaskValue, "The value a zero sum is masked with... for internal reasons -,-");
 }

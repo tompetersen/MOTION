@@ -63,6 +63,8 @@ std::vector<uint32_t> EvaluateProtocol(encrypto::motion::PartyPointer& party, st
     input_values[i] = tmp;
   }
 
+  // TODO use arithmetic circuit for additions and transform to boolean for comparison?
+  // TODO maybe it would be better to introduce k, zero and zeroMask values number_of_inputs times for separated parallelizable circuits?
   
   // we might introduce central party which inputs k?
   mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
@@ -143,6 +145,17 @@ std::vector<uint32_t> EvaluateProtocol(encrypto::motion::PartyPointer& party, st
   return results;
 }
 
+std::vector<uint32_t> EvaluateProtocolBasic(encrypto::motion::PartyPointer& party, std::vector<std::uint32_t> values, std::uint32_t kValue) {
+    return EvaluateProtocol(party, values, kValue);
+}
+
+std::vector<uint32_t> EvaluateProtocolTreeAddition(encrypto::motion::PartyPointer& party, std::vector<std::uint32_t> values, std::uint32_t kValue) {
+    return EvaluateProtocol(party, values, kValue);
+}
+
+std::vector<uint32_t> EvaluateProtocolArithmeticThenBool(encrypto::motion::PartyPointer& party, std::vector<std::uint32_t> values, std::uint32_t kValue) {
+    return EvaluateProtocol(party, values, kValue);
+}
 
 uint32_t GetZeroMaskValue() {
     //TODO There seems to be a bug in MOTION
