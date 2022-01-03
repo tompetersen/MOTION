@@ -63,15 +63,19 @@ std::vector<uint32_t> EvaluateProtocol(encrypto::motion::PartyPointer& party, st
     input_values[i] = tmp;
   }
 
+  
   // we might introduce central party which inputs k?
   mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
+
   // we mask sums equal to 0 with MAX to distinguish the cases 0, < k and >= k
   uint32_t zeroMask = GetZeroMaskValue();
   mo::SecureUnsignedInteger secureZeroMask = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zeroMask), 0);
+
   // we mask sums smaller than k with 0, leaking no info
   uint32_t zero = 0;
   mo::SecureUnsignedInteger secureZero = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zero), 0);
  
+  // compute sums
   std::vector<mo::SecureUnsignedInteger> sums(number_of_inputs);
   for (std::size_t j = 0; j < number_of_inputs; ++j) {
     sums[j] = input_values[0][j];
@@ -84,18 +88,20 @@ std::vector<uint32_t> EvaluateProtocol(encrypto::motion::PartyPointer& party, st
     }
   }
 
+  // perform comparisons
   std::vector<mo::ShareWrapper> comparisons(number_of_inputs);
 
   for (std::size_t j = 0; j < number_of_inputs; ++j) {
+    // we perform the check for zero first to distinguish between zero and less than k  
+    // result = sum == 0 ? zeroMask : sum  
     mo::ShareWrapper comparison1 = sums[j] == secureZero;
     comparisons[j] = comparison1.Mux(secureZeroMask.Get(), sums[j].Get());
+    // result = k > result ? 0 : result
     mo::ShareWrapper comparison2 = secureK > comparisons[j];
     comparisons[j] = comparison2.Mux(secureZero.Get(), comparisons[j].Get());
   }
 
-//  mo::ShareWrapper& temp{sum.Get()};
-//  auto output = temp.Out();
-
+  // output gates
   std::vector<mo::ShareWrapper> outputs(number_of_inputs);
   for (std::size_t j = 0; j < number_of_inputs; ++j) {
     outputs[j] = comparisons[j].Out();
@@ -124,11 +130,10 @@ std::vector<uint32_t> EvaluateProtocol(encrypto::motion::PartyPointer& party, st
 
   std::cout << "Finished run. Results: " << std::endl;
 
+  //convert results from binary to int
   std::vector<uint32_t> results(number_of_inputs);
   for (std::size_t j = 0; j < number_of_inputs; ++j) {
-    // retrieve the result in boolean form
     auto binary_output{outputs[j].As<std::vector<mo::BitVector<>>>()};
-    // convert the binary result to integer
     auto result = mo::ToOutput<std::uint32_t>(binary_output);
     results[j] = result;
 
