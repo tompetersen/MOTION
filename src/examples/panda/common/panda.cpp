@@ -33,7 +33,7 @@
 #include "protocols/share_wrapper.h"
 #include "secure_type/secure_unsigned_integer.h"
 #include "utility/config.h"
-
+#include "statistics/analysis.h"
 
 
 namespace mo = encrypto::motion;
@@ -105,6 +105,22 @@ std::vector<uint32_t> EvaluateProtocol(encrypto::motion::PartyPointer& party, st
 
   party->Run();
   party->Finish();
+
+  //performance statistics
+  encrypto::motion::AccumulatedRunTimeStatistics accumulated_statistics;
+  encrypto::motion::AccumulatedCommunicationStatistics accumulated_communication_statistics;
+
+  const auto& statistics = party->GetBackend()->GetRunTimeStatistics(); // /src/motioncore/statistics/run_time_statistics.h
+  const auto unclear = statistics.front();
+  const auto communcation_statistics = party->GetCommunicationLayer().GetTransportStatistics(); // panda/src/motioncore/communication/transport.h
+
+  accumulated_statistics.Add(unclear);
+  accumulated_communication_statistics.Add(communcation_statistics);
+
+
+  if (party->GetCommunicationLayer().GetMyId() == 0) {
+      std::cout << encrypto::motion::PrintStatistics("Statistics", accumulated_statistics, accumulated_communication_statistics) << std::endl;
+  }
 
   std::cout << "Finished run. Results: " << std::endl;
 
