@@ -90,7 +90,6 @@ std::vector<uint32_t> performBasic(std::vector<std::tuple<std::size_t, std::stri
   return perform(parties, my_id, inputs, k, 1);
 }
 
-
 std::vector<uint32_t> performTreeSum(std::vector<std::tuple<std::size_t, std::string, std::uint16_t>> parties, std::size_t my_id, std::vector<uint32_t> inputs, uint32_t k) {
   return perform(parties, my_id, inputs, k, 2);
 }

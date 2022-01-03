@@ -62,7 +62,7 @@ int main(int ac, char* av[]) {
   std::vector<uint32_t> inputs{{0, 2, 4, 6}};
   uint32_t k = 5;
 
-  auto results = EvaluateProtocol(party, inputs, k);
+  auto results = EvaluateProtocolBasic(party, inputs, k);
 
   std::cout << "Finished! Results in main: " << std::flush;
 
