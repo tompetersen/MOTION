@@ -70,12 +70,12 @@ std::vector<uint32_t> EvaluateProtocolBasic(encrypto::motion::PartyPointer& part
   mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
 
   // we mask sums equal to 0 with MAX to distinguish the cases 0, < k and >= k
-  uint32_t zeroMask = GetZeroMaskValue();
+  uint32_t zeroMask = zeroMaskValue();
   mo::SecureUnsignedInteger secureZeroMask = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zeroMask), 0);
 
   // we mask sums smaller than k with 0, leaking no info
-  uint32_t zero = 0;
-  mo::SecureUnsignedInteger secureZero = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zero), 0);
+  uint32_t smallerKMask = smallerKMaskValue();
+  mo::SecureUnsignedInteger secureSmallerKMask = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(smallerKMask), 0);
  
   // compute sums
   std::vector<mo::SecureUnsignedInteger> sums(number_of_inputs);
@@ -100,7 +100,7 @@ std::vector<uint32_t> EvaluateProtocolBasic(encrypto::motion::PartyPointer& part
     comparisons[j] = comparison1.Mux(secureZeroMask.Get(), sums[j].Get());
     // result = k > result ? 0 : result
     mo::ShareWrapper comparison2 = secureK > comparisons[j];
-    comparisons[j] = comparison2.Mux(secureZero.Get(), comparisons[j].Get());
+    comparisons[j] = comparison2.Mux(secureSmallerKMask.Get(), comparisons[j].Get());
   }
 
   // output gates
@@ -190,10 +190,10 @@ std::vector<uint32_t> EvaluateProtocolTreeAdditionParted(encrypto::motion::Party
   }
 
   // we mask sums smaller than k with 0, leaking no info
-  uint32_t zero = 0;
-  std::vector<mo::SecureUnsignedInteger> secureZero(numberOfInputs);
+  std::vector<mo::SecureUnsignedInteger> secureSmallerKMask(numberOfInputs);
+  uint32_t smallerKMask = smallerKMaskValue();
   for (std::size_t i = 0; i < numberOfInputs; i++) {
-      secureZero[i] = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zero), 0);
+      secureSmallerKMask[i] = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(smallerKMask), 0);
   }
 
 
@@ -235,7 +235,7 @@ std::vector<uint32_t> EvaluateProtocolTreeAdditionParted(encrypto::motion::Party
     comparisons[j] = comparison1.Mux(secureZeroMask[j].Get(), sums[j].Get());
     // result = k > result ? 0 : result
     mo::ShareWrapper comparison2 = secureK[j] > comparisons[j];
-    comparisons[j] = comparison2.Mux(secureZero[j].Get(), comparisons[j].Get());
+    comparisons[j] = comparison2.Mux(secureSmallerKMask[j].Get(), comparisons[j].Get());
   }
 
   // output gates
@@ -316,13 +316,12 @@ std::vector<uint32_t> EvaluateProtocolTreeAddition(encrypto::motion::PartyPointe
   mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
 
   // we mask sums equal to 0 with MAX to distinguish the cases 0, < k and >= k
-  uint32_t zeroMask = GetZeroMaskValue();
+  uint32_t zeroMask = zeroMaskValue();
   mo::SecureUnsignedInteger secureZeroMask = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zeroMask), 0);
 
   // we mask sums smaller than k with 0, leaking no info
-  uint32_t zero = 0;
-  mo::SecureUnsignedInteger secureZero = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zero), 0);
-
+  uint32_t smallerKMask = smallerKMaskValue();
+  mo::SecureUnsignedInteger secureSmallerKMask = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(smallerKMask), 0);
 
 
 
@@ -362,7 +361,7 @@ std::vector<uint32_t> EvaluateProtocolTreeAddition(encrypto::motion::PartyPointe
     comparisons[j] = comparison1.Mux(secureZeroMask.Get(), sums[j].Get());
     // result = k > result ? 0 : result
     mo::ShareWrapper comparison2 = secureK > comparisons[j];
-    comparisons[j] = comparison2.Mux(secureZero.Get(), comparisons[j].Get());
+    comparisons[j] = comparison2.Mux(secureSmallerKMask.Get(), comparisons[j].Get());
   }
 
   // output gates
@@ -441,13 +440,12 @@ std::vector<uint32_t> EvaluateProtocolArithmeticThenBool(encrypto::motion::Party
   mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
 
   // we mask sums equal to 0 with MAX to distinguish the cases 0, < k and >= k
-  uint32_t zeroMask = GetZeroMaskValue();
+  uint32_t zeroMask = zeroMaskValue();
   mo::SecureUnsignedInteger secureZeroMask = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zeroMask), 0);
 
   // we mask sums smaller than k with 0, leaking no info
-  uint32_t zero = 0;
-  mo::SecureUnsignedInteger secureZero = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zero), 0);
-
+  uint32_t smallerKMask = smallerKMaskValue();
+  mo::SecureUnsignedInteger secureSmallerKMask = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(smallerKMask), 0);
 
 
 
@@ -498,7 +496,7 @@ std::vector<uint32_t> EvaluateProtocolArithmeticThenBool(encrypto::motion::Party
     comparisons[j] = comparison1.Mux(secureZeroMask.Get(), sums[j].Get());
     // result = k > result ? 0 : result
     mo::ShareWrapper comparison2 = secureK > comparisons[j];
-    comparisons[j] = comparison2.Mux(secureZero.Get(), comparisons[j].Get());
+    comparisons[j] = comparison2.Mux(secureSmallerKMask.Get(), comparisons[j].Get());
   }
 
   // output gates
@@ -543,7 +541,7 @@ std::vector<uint32_t> EvaluateProtocolArithmeticThenBool(encrypto::motion::Party
   return results;
 }
 
-uint32_t GetZeroMaskValue() {
+uint32_t zeroMaskValue() {
     //TODO There seems to be a bug in MOTION
     // cmp = uint32_t.max() > 5 
     // cmp.mux(a, b) 
@@ -552,4 +550,8 @@ uint32_t GetZeroMaskValue() {
     // enough to never occur in practice anyway.
 
     return std::numeric_limits<uint32_t>::max() / 4;
+}
+
+uint32_t smallerKMaskValue() {
+    return 0;
 }

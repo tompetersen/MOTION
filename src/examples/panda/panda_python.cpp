@@ -106,7 +106,7 @@ std::vector<uint32_t> performTreeSumParted(std::vector<std::tuple<std::size_t, s
 }
 
 uint32_t getZeroMaskValue() {
-  return GetZeroMaskValue();
+  return zeroMaskValue();
 }
 
 

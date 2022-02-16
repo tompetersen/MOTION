@@ -34,4 +34,6 @@ std::vector<uint32_t> EvaluateProtocolTreeAdditionParted(encrypto::motion::Party
 
 std::vector<uint32_t> EvaluateProtocolArithmeticThenBool(encrypto::motion::PartyPointer& party, std::vector<std::uint32_t> values, std::uint32_t kValue);
 
-std::uint32_t GetZeroMaskValue();
+std::uint32_t zeroMaskValue();
+
+std::uint32_t smallerKMaskValue();
