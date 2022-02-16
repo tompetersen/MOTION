@@ -44,27 +44,27 @@ std::vector<uint32_t> EvaluateProtocolBasic(encrypto::motion::PartyPointer& part
   
   std::cout << "Starting eval..." << std::endl;
 
-  const std::size_t number_of_parties{party->GetConfiguration()->GetNumOfParties()};
-  const std::size_t number_of_inputs{values.size()};
+  const std::size_t numberOfParties{party->GetConfiguration()->GetNumOfParties()};
+  const std::size_t numberOfInputs{values.size()};
 
-  std::cout << "Before input_values init (parties: " << number_of_parties << ", values: " << number_of_inputs << ")..." << std::endl;
+  std::cout << "Before inputValues init (parties: " << numberOfParties << ", values: " << numberOfInputs << ")..." << std::endl;
 
   // (pre-)allocate indices and input values
-  std::vector<std::vector<mo::SecureUnsignedInteger>> input_values(number_of_parties);
+  std::vector<std::vector<mo::SecureUnsignedInteger>> inputValues(numberOfParties);
 
   // share inputs
   // remark: the input values to other parties' input gates are considered as buffers
   // and the values are simply ignored and overwritten later
-  for (std::size_t i = 0; i < number_of_parties; ++i) {
-    std::vector<mo::SecureUnsignedInteger> tmp(number_of_inputs);
-    for (std::size_t j = 0; j < number_of_inputs; ++j) {
+  for (std::size_t i = 0; i < numberOfParties; ++i) {
+    std::vector<mo::SecureUnsignedInteger> tmp(numberOfInputs);
+    for (std::size_t j = 0; j < numberOfInputs; ++j) {
       tmp[j] = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(values[j]), i);
     }
-    input_values[i] = tmp;
+    inputValues[i] = tmp;
   }
 
   // TODO use arithmetic circuit for additions and transform to boolean for comparison?
-  // TODO maybe it would be better to introduce k, zero and zeroMask values number_of_inputs times for separated parallelizable circuits?
+  // TODO maybe it would be better to introduce k, zero and zeroMask values numberOfInputs times for separated parallelizable circuits?
   
   // we might introduce central party which inputs k?
   mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
@@ -78,22 +78,22 @@ std::vector<uint32_t> EvaluateProtocolBasic(encrypto::motion::PartyPointer& part
   mo::SecureUnsignedInteger secureSmallerKMask = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(smallerKMask), 0);
  
   // compute sums
-  std::vector<mo::SecureUnsignedInteger> sums(number_of_inputs);
-  for (std::size_t j = 0; j < number_of_inputs; ++j) {
-    sums[j] = input_values[0][j];
+  std::vector<mo::SecureUnsignedInteger> sums(numberOfInputs);
+  for (std::size_t j = 0; j < numberOfInputs; ++j) {
+    sums[j] = inputValues[0][j];
   }
 
-  for (std::size_t i = 1; i != input_values.size(); ++i) {
-    for (std::size_t j = 0; j < number_of_inputs; ++j) {
-      sums[j] += input_values[i][j];
+  for (std::size_t i = 1; i != inputValues.size(); ++i) {
+    for (std::size_t j = 0; j < numberOfInputs; ++j) {
+      sums[j] += inputValues[i][j];
       // TODO DD: maybe tree-like addition?
     }
   }
 
   // perform comparisons
-  std::vector<mo::ShareWrapper> comparisons(number_of_inputs);
+  std::vector<mo::ShareWrapper> comparisons(numberOfInputs);
 
-  for (std::size_t j = 0; j < number_of_inputs; ++j) {
+  for (std::size_t j = 0; j < numberOfInputs; ++j) {
     // we perform the check for zero first to distinguish between zero and less than k  
     // result = sum == 0 ? zeroMask : sum  
     mo::ShareWrapper comparison1 = sums[j] == secureZero;
@@ -104,8 +104,8 @@ std::vector<uint32_t> EvaluateProtocolBasic(encrypto::motion::PartyPointer& part
   }
 
   // output gates
-  std::vector<mo::ShareWrapper> outputs(number_of_inputs);
-  for (std::size_t j = 0; j < number_of_inputs; ++j) {
+  std::vector<mo::ShareWrapper> outputs(numberOfInputs);
+  for (std::size_t j = 0; j < numberOfInputs; ++j) {
     outputs[j] = comparisons[j].Out();
   }
  
@@ -133,8 +133,8 @@ std::vector<uint32_t> EvaluateProtocolBasic(encrypto::motion::PartyPointer& part
   std::cout << "Finished run. Results: " << std::endl;
 
   //convert results from binary to int
-  std::vector<uint32_t> results(number_of_inputs);
-  for (std::size_t j = 0; j < number_of_inputs; ++j) {
+  std::vector<uint32_t> results(numberOfInputs);
+  for (std::size_t j = 0; j < numberOfInputs; ++j) {
     auto binary_output{outputs[j].As<std::vector<mo::BitVector<>>>()};
     auto result = mo::ToOutput<std::uint32_t>(binary_output);
     results[j] = result;
@@ -288,29 +288,29 @@ std::vector<uint32_t> EvaluateProtocolTreeAddition(encrypto::motion::PartyPointe
   
   std::cout << "Starting eval..." << std::endl;
 
-  const std::size_t number_of_parties{party->GetConfiguration()->GetNumOfParties()};
-  const std::size_t number_of_inputs{values.size()};
+  const std::size_t numberOfParties{party->GetConfiguration()->GetNumOfParties()};
+  const std::size_t numberOfInputs{values.size()};
 
-  std::cout << "Before input_values init (parties: " << number_of_parties << ", values: " << number_of_inputs << ")..." << std::endl;
+  std::cout << "Before inputValues init (parties: " << numberOfParties << ", values: " << numberOfInputs << ")..." << std::endl;
 
   // (pre-)allocate indices and input values
-  std::vector<std::vector<mo::SecureUnsignedInteger>> input_values(number_of_inputs);
+  std::vector<std::vector<mo::SecureUnsignedInteger>> inputValues(numberOfInputs);
 
   // share inputs
   // remark: the input values to other parties' input gates are considered as buffers
   // and the values are simply ignored and overwritten later
   //
   // ATTENTION: we have changed the order of inputs and parties here!
-  for (std::size_t i = 0; i < number_of_inputs; ++i) {
-    std::vector<mo::SecureUnsignedInteger> tmp(number_of_parties);
-    for (std::size_t j = 0; j < number_of_parties; ++j) {
+  for (std::size_t i = 0; i < numberOfInputs; ++i) {
+    std::vector<mo::SecureUnsignedInteger> tmp(numberOfParties);
+    for (std::size_t j = 0; j < numberOfParties; ++j) {
       tmp[j] = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(values[i]), j);
     }
-    input_values[i] = tmp;
+    inputValues[i] = tmp;
   }
 
   // TODO use arithmetic circuit for additions and transform to boolean for comparison?
-  // TODO maybe it would be better to introduce k, zero and zeroMask values number_of_inputs times for separated parallelizable circuits?
+  // TODO maybe it would be better to introduce k, zero and zeroMask values numberOfInputs times for separated parallelizable circuits?
   
   // we might introduce central party which inputs k?
   mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
@@ -326,11 +326,11 @@ std::vector<uint32_t> EvaluateProtocolTreeAddition(encrypto::motion::PartyPointe
 
 
   // compute sums
-  std::vector<mo::SecureUnsignedInteger> sums(number_of_inputs);
+  std::vector<mo::SecureUnsignedInteger> sums(numberOfInputs);
 
-  for (std::size_t k = 0; k < number_of_inputs; ++k) {
+  for (std::size_t k = 0; k < numberOfInputs; ++k) {
       // build balanced binary tree for each input
-      std::vector<mo::SecureUnsignedInteger> single_input = input_values[k];
+      std::vector<mo::SecureUnsignedInteger> single_input = inputValues[k];
       while (single_input.size() > 1) {
           unsigned j = 0;
           for (unsigned i = 0; i < single_input.size();) {
@@ -352,9 +352,9 @@ std::vector<uint32_t> EvaluateProtocolTreeAddition(encrypto::motion::PartyPointe
 
 
   // perform comparisons
-  std::vector<mo::ShareWrapper> comparisons(number_of_inputs);
+  std::vector<mo::ShareWrapper> comparisons(numberOfInputs);
 
-  for (std::size_t j = 0; j < number_of_inputs; ++j) {
+  for (std::size_t j = 0; j < numberOfInputs; ++j) {
     // we perform the check for zero first to distinguish between zero and less than k  
     // result = sum == 0 ? zeroMask : sum  
     mo::ShareWrapper comparison1 = sums[j] == secureZero;
@@ -365,8 +365,8 @@ std::vector<uint32_t> EvaluateProtocolTreeAddition(encrypto::motion::PartyPointe
   }
 
   // output gates
-  std::vector<mo::ShareWrapper> outputs(number_of_inputs);
-  for (std::size_t j = 0; j < number_of_inputs; ++j) {
+  std::vector<mo::ShareWrapper> outputs(numberOfInputs);
+  for (std::size_t j = 0; j < numberOfInputs; ++j) {
     outputs[j] = comparisons[j].Out();
   }
  
@@ -394,8 +394,8 @@ std::vector<uint32_t> EvaluateProtocolTreeAddition(encrypto::motion::PartyPointe
   std::cout << "Finished run. Results: " << std::endl;
 
   //convert results from binary to int
-  std::vector<uint32_t> results(number_of_inputs);
-  for (std::size_t j = 0; j < number_of_inputs; ++j) {
+  std::vector<uint32_t> results(numberOfInputs);
+  for (std::size_t j = 0; j < numberOfInputs; ++j) {
     auto binary_output{outputs[j].As<std::vector<mo::BitVector<>>>()};
     auto result = mo::ToOutput<std::uint32_t>(binary_output);
     results[j] = result;
@@ -411,30 +411,30 @@ std::vector<uint32_t> EvaluateProtocolArithmeticThenBool(encrypto::motion::Party
   
   std::cout << "Starting eval..." << std::endl;
 
-  const std::size_t number_of_parties{party->GetConfiguration()->GetNumOfParties()};
-  const std::size_t number_of_inputs{values.size()};
+  const std::size_t numberOfParties{party->GetConfiguration()->GetNumOfParties()};
+  const std::size_t numberOfInputs{values.size()};
 
-  std::cout << "Before input_values init (parties: " << number_of_parties << ", values: " << number_of_inputs << ")..." << std::endl;
+  std::cout << "Before inputValues init (parties: " << numberOfParties << ", values: " << numberOfInputs << ")..." << std::endl;
 
   // (pre-)allocate indices and input values
-  std::vector<std::vector<mo::SecureUnsignedInteger>> input_values(number_of_inputs);
+  std::vector<std::vector<mo::SecureUnsignedInteger>> inputValues(numberOfInputs);
 
   // share inputs
   // remark: the input values to other parties' input gates are considered as buffers
   // and the values are simply ignored and overwritten later
   //
   // ATTENTION: we have changed the order of inputs and parties here!
-  for (std::size_t i = 0; i < number_of_inputs; ++i) {
-    std::vector<mo::SecureUnsignedInteger> tmp(number_of_parties);
-    for (std::size_t j = 0; j < number_of_parties; ++j) {
+  for (std::size_t i = 0; i < numberOfInputs; ++i) {
+    std::vector<mo::SecureUnsignedInteger> tmp(numberOfParties);
+    for (std::size_t j = 0; j < numberOfParties; ++j) {
       // tmp[j] = party->In<mo::MpcProtocol::kArithmeticGmw>(mo::ToInput(values[i]), j);
       tmp[j] = party->In<mo::MpcProtocol::kArithmeticGmw>(values[i], j);
     }
-    input_values[i] = tmp;
+    inputValues[i] = tmp;
   }
 
   // TODO use arithmetic circuit for additions and transform to boolean for comparison?
-  // TODO maybe it would be better to introduce k, zero and zeroMask values number_of_inputs times for separated parallelizable circuits?
+  // TODO maybe it would be better to introduce k, zero and zeroMask values numberOfInputs times for separated parallelizable circuits?
   
   // we might introduce central party which inputs k?
   mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
@@ -450,11 +450,11 @@ std::vector<uint32_t> EvaluateProtocolArithmeticThenBool(encrypto::motion::Party
 
 
   // compute sums
-  std::vector<mo::SecureUnsignedInteger> sums(number_of_inputs);
+  std::vector<mo::SecureUnsignedInteger> sums(numberOfInputs);
 
-  for (std::size_t k = 0; k < number_of_inputs; ++k) {
+  for (std::size_t k = 0; k < numberOfInputs; ++k) {
       // build balanced binary tree for each input
-      std::vector<mo::SecureUnsignedInteger> single_input = input_values[k];
+      std::vector<mo::SecureUnsignedInteger> single_input = inputValues[k];
       while (single_input.size() > 1) {
           unsigned j = 0;
           for (unsigned i = 0; i < single_input.size();) {
@@ -487,9 +487,9 @@ std::vector<uint32_t> EvaluateProtocolArithmeticThenBool(encrypto::motion::Party
 
 
   // perform comparisons
-  std::vector<mo::ShareWrapper> comparisons(number_of_inputs);
+  std::vector<mo::ShareWrapper> comparisons(numberOfInputs);
 
-  for (std::size_t j = 0; j < number_of_inputs; ++j) {
+  for (std::size_t j = 0; j < numberOfInputs; ++j) {
     // we perform the check for zero first to distinguish between zero and less than k  
     // result = sum == 0 ? zeroMask : sum  
     mo::ShareWrapper comparison1 = sums[j] == secureZero;
@@ -500,8 +500,8 @@ std::vector<uint32_t> EvaluateProtocolArithmeticThenBool(encrypto::motion::Party
   }
 
   // output gates
-  std::vector<mo::ShareWrapper> outputs(number_of_inputs);
-  for (std::size_t j = 0; j < number_of_inputs; ++j) {
+  std::vector<mo::ShareWrapper> outputs(numberOfInputs);
+  for (std::size_t j = 0; j < numberOfInputs; ++j) {
     outputs[j] = comparisons[j].Out();
   }
  
@@ -529,8 +529,8 @@ std::vector<uint32_t> EvaluateProtocolArithmeticThenBool(encrypto::motion::Party
   std::cout << "Finished run. Results: " << std::endl;
 
   //convert results from binary to int
-  std::vector<uint32_t> results(number_of_inputs);
-  for (std::size_t j = 0; j < number_of_inputs; ++j) {
+  std::vector<uint32_t> results(numberOfInputs);
+  for (std::size_t j = 0; j < numberOfInputs; ++j) {
     auto binary_output{outputs[j].As<std::vector<mo::BitVector<>>>()};
     auto result = mo::ToOutput<std::uint32_t>(binary_output);
     results[j] = result;
