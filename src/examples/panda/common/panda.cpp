@@ -68,6 +68,8 @@ std::vector<uint32_t> EvaluateProtocolBasic(encrypto::motion::PartyPointer& part
   
   // we might introduce central party which inputs k?
   mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
+  uint32_t zero = 0;
+  mo::SecureUnsignedInteger secureZero = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zero), 0);
 
   // we mask sums equal to 0 with MAX to distinguish the cases 0, < k and >= k
   uint32_t zeroMask = zeroMaskValue();
@@ -180,6 +182,12 @@ std::vector<uint32_t> EvaluateProtocolTreeAdditionParted(encrypto::motion::Party
   std::vector<mo::SecureUnsignedInteger> secureK(numberOfInputs);
   for (std::size_t i = 0; i < numberOfInputs; i++) {
       secureK[i] = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
+  }
+
+  uint32_t zero = 0;
+  std::vector<mo::SecureUnsignedInteger> secureZero(numberOfInputs);
+  for (std::size_t i = 0; i < numberOfInputs; i++) {
+      secureZero[i] = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zero), 0);
   }
 
   // we mask sums equal to 0 with MAX to distinguish the cases 0, < k and >= k
@@ -314,6 +322,8 @@ std::vector<uint32_t> EvaluateProtocolTreeAddition(encrypto::motion::PartyPointe
   
   // we might introduce central party which inputs k?
   mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
+  uint32_t zero = 0;
+  mo::SecureUnsignedInteger secureZero = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zero), 0);
 
   // we mask sums equal to 0 with MAX to distinguish the cases 0, < k and >= k
   uint32_t zeroMask = zeroMaskValue();
@@ -438,6 +448,8 @@ std::vector<uint32_t> EvaluateProtocolArithmeticThenBool(encrypto::motion::Party
   
   // we might introduce central party which inputs k?
   mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
+  uint32_t zero = 0;
+  mo::SecureUnsignedInteger secureZero = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zero), 0);
 
   // we mask sums equal to 0 with MAX to distinguish the cases 0, < k and >= k
   uint32_t zeroMask = zeroMaskValue();
@@ -583,6 +595,8 @@ std::vector<std::vector<uint32_t>> EvaluateProtocolArithmeticThenBoolWithGroups(
 
   // we might introduce central party which inputs k?
   mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
+  uint32_t zero = 0;
+  mo::SecureUnsignedInteger secureZero = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zero), 0);
 
   // we mask sums equal to 0 with MAX to distinguish the cases 0, < k and >= k
   uint32_t zeroMask = zeroMaskValue();
