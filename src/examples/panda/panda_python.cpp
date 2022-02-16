@@ -83,6 +83,9 @@ std::vector<uint32_t> perform(std::vector<std::tuple<std::size_t, std::string, s
   else if (variant == 3) {
     return EvaluateProtocolArithmeticThenBool(party, inputs, k);
   }
+  else if (variant == 4) {
+    return EvaluateProtocolTreeAdditionParted(party, inputs, k);
+  }
 }
 
 
@@ -96,6 +99,10 @@ std::vector<uint32_t> performTreeSum(std::vector<std::tuple<std::size_t, std::st
 
 std::vector<uint32_t> performArithmeticThenBool(std::vector<std::tuple<std::size_t, std::string, std::uint16_t>> parties, std::size_t my_id, std::vector<uint32_t> inputs, uint32_t k) {
   return perform(parties, my_id, inputs, k, 3);
+}
+
+std::vector<uint32_t> performTreeSumParted(std::vector<std::tuple<std::size_t, std::string, std::uint16_t>> parties, std::size_t my_id, std::vector<uint32_t> inputs, uint32_t k) {
+  return perform(parties, my_id, inputs, k, 4);
 }
 
 uint32_t getZeroMaskValue() {
@@ -112,6 +119,8 @@ PYBIND11_MODULE(pandapython, m) {
     
     m.def("perform_arithmetic_then_bool", &performArithmeticThenBool, "Perform parallel sum>k mpc protocol", py::arg("parties"), py::arg("my_id"), py::arg("my_inputs"), py::arg("k"));
 
+    m.def("perform_tree_sum_parted", &performTreeSumParted, "Perform parallel sum>k mpc protocol", py::arg("parties"), py::arg("my_id"), py::arg("my_inputs"), py::arg("k"));
+    
     m.def("get_zero_mask_value", &getZeroMaskValue, "The value a zero sum is masked with... for internal reasons -,-");
 }
 
