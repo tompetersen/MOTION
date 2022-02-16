@@ -685,13 +685,13 @@ std::vector<std::vector<uint32_t>> EvaluateProtocolArithmeticThenBoolWithGroups(
   // output gates
   // TODO include in upper loop
   std::vector<std::vector<mo::ShareWrapper>> outputs(numberOfGroups);
-  for (std::size_t groupIdx = 0; groupIdx < numberOfInputs; ++groupIdx) {
+  for (std::size_t groupIdx = 0; groupIdx < numberOfGroups; ++groupIdx) {
       std::size_t subgroupSize = sums[groupIdx].size();
       std::vector<mo::ShareWrapper> subgroupOutputs(subgroupSize);
       for (std::size_t subgroupIdx = 0; subgroupIdx < subgroupSize; subgroupIdx++) {
         subgroupOutputs[subgroupIdx] = resultGroups[groupIdx][subgroupIdx].Out();
       }
-      outputs[groupIdx] = subgroupOutputs
+      outputs[groupIdx] = subgroupOutputs;
   }
  
   std::cout << "Running eval..." << std::endl;
