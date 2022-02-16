@@ -541,6 +541,187 @@ std::vector<uint32_t> EvaluateProtocolArithmeticThenBool(encrypto::motion::Party
   return results;
 }
 
+
+
+std::vector<std::vector<uint32_t>> EvaluateProtocolArithmeticThenBoolWithGroups(encrypto::motion::PartyPointer& party, std::vector<std::vector<std::uint32_t>> values, std::uint32_t kValue) {
+  /*
+  heavily inspired by millionaires problem
+
+  party: 
+  values: describes a list of subgroups (related values)
+          when the sum of at least one value in a subgroup is less than k and greater than 0 then all values in the subgroup are blinded
+  kValue: 
+  */
+  
+  std::cout << "Starting eval..." << std::endl;
+
+  const std::size_t numberOfParties{party->GetConfiguration()->GetNumOfParties()};
+  const std::size_t numberOfGroups{values.size()};
+
+  std::cout << "Before inputValues init (parties: " << numberOfParties << ", groups: " << numberOfGroups << ")..." << std::endl;
+
+  // (pre-)allocate indices and input values
+  std::vector<std::vector<std::vector<mo::SecureUnsignedInteger>>> inputValues(numberOfGroups);
+
+  // share inputs
+  // groups -> subgroups -> parties
+  //
+  // remark: the input values to other parties' input gates are considered as buffers
+  // and the values are simply ignored and overwritten later
+  for (std::size_t groupIdx = 0; groupIdx < numberOfGroups; ++groupIdx) {
+    std::size_t subgroupSize = values[groupIdx].size();  
+    std::vector<std::vector<mo::SecureUnsignedInteger>> subgroups(subgroupSize);
+    for (std::size_t subgroupIdx = 0; subgroupIdx < subgroupSize; ++subgroupIdx) {
+      std::vector<mo::SecureUnsignedInteger> partyValues(numberOfParties);
+      for (std::size_t partyIdx = 0; partyIdx < numberOfParties; ++partyIdx) {
+        partyValues[partyIdx] = party->In<mo::MpcProtocol::kArithmeticGmw>(values[groupIdx][subgroupIdx], partyIdx);
+      }
+      subgroups[subgroupIdx] = partyValues;
+    }
+    inputValues[groupIdx] = subgroups;
+  }
+
+  // we might introduce central party which inputs k?
+  mo::SecureUnsignedInteger secureK = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(kValue), 0);
+
+  // we mask sums equal to 0 with MAX to distinguish the cases 0, < k and >= k
+  uint32_t zeroMask = zeroMaskValue();
+  mo::SecureUnsignedInteger secureZeroMask = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(zeroMask), 0);
+
+  // we mask sums smaller than k with 0, leaking no info
+  uint32_t smallerKMask = smallerKMaskValue();
+  mo::SecureUnsignedInteger secureSmallerKMask = party->In<mo::MpcProtocol::kBooleanGmw>(mo::ToInput(smallerKMask), 0);
+
+  // compute sums
+  std::vector<std::vector<mo::SecureUnsignedInteger>> sums(numberOfGroups);
+
+  for (std::size_t groupIdx = 0; groupIdx < numberOfGroups; ++groupIdx) {
+    std::size_t subgroupSize = values[groupIdx].size();
+    std::vector<mo::SecureUnsignedInteger> subgroupSums(subgroupSize);
+    for (std::size_t subgroupIdx = 0; subgroupIdx < numberOfGroups; ++subgroupIdx) {
+      // build balanced binary tree for each input
+      std::vector<mo::SecureUnsignedInteger> partyInputs = inputValues[groupIdx][subgroupIdx];
+      while (partyInputs.size() > 1) {
+          unsigned j = 0;
+          for (unsigned i = 0; i < partyInputs.size();) {
+              if (i + 1 >= partyInputs.size()) { //place single element at vector end
+                  partyInputs[j] = partyInputs[i];
+                  i++;
+              } 
+              else { //add two elements
+                  partyInputs[j] = partyInputs[i + 1] + partyInputs[i];
+                  i += 2;
+              }
+              j++;
+          }
+          partyInputs.resize(j);
+      }
+      subgroupSums[subgroupIdx] = partyInputs[0];
+    }
+    sums[groupIdx] = subgroupSums;
+  }
+
+
+
+  //convert kArithmetic to kBoolean
+  for (std::size_t groupIdx = 0; groupIdx < sums.size(); groupIdx++) {
+      std::size_t subgroupSize = sums[groupIdx].size();
+      for (std::size_t subgroupIdx = 0; subgroupIdx < subgroupSize; subgroupIdx++) {
+          mo::ShareWrapper share_input(sums[groupIdx][subgroupIdx].Get());
+          mo::ShareWrapper share_conversion{share_input.Convert<mo::MpcProtocol::kBooleanGmw>()};
+          mo::SecureUnsignedInteger tmp_sui(share_conversion);
+          sums[groupIdx][subgroupIdx] = tmp_sui;
+      }
+  }
+
+
+
+
+  // perform comparisons
+  std::vector<std::vector<mo::ShareWrapper>> resultGroups(numberOfGroups);
+
+  for (std::size_t groupIdx = 0; groupIdx < numberOfGroups; ++groupIdx) {
+      std::size_t subgroupSize = sums[groupIdx].size();
+      std::vector<mo::ShareWrapper> subgroupSums(subgroupSize);
+
+      std::vector<mo::ShareWrapper> subgroupSmallerKComparisons(subgroupSize);
+      for (std::size_t subgroupIdx = 0; subgroupIdx < subgroupSize; subgroupIdx++) {
+        // we perform the check for zero first to distinguish between zero and less than k  
+        // result = sum == 0 ? zeroMask : sum  
+        mo::ShareWrapper comparison1 = sums[groupIdx][subgroupIdx] == secureZero;
+        subgroupSums[subgroupIdx] = comparison1.Mux(secureZeroMask.Get(), sums[groupIdx][subgroupIdx].Get());
+        
+        // k > result
+        // TODO we might also change the comparison order and perform AND later?
+        subgroupSmallerKComparisons[subgroupIdx] = secureK > subgroupSums[subgroupIdx];
+      }
+      
+      mo::ShareWrapper subgroupContainsSmallerK = subgroupSmallerKComparisons[0];
+      for (std::size_t subgroupIdx = 1; subgroupIdx < subgroupSize; subgroupIdx++) {
+        subgroupContainsSmallerK |= subgroupSmallerKComparisons[subgroupIdx];
+      }
+
+      for (std::size_t subgroupIdx = 0; subgroupIdx < subgroupSize; subgroupIdx++) {
+        subgroupSums[subgroupIdx] = subgroupContainsSmallerK.Mux(secureSmallerKMask.Get(), subgroupSums[subgroupIdx].Get());
+      }
+
+      resultGroups[groupIdx] = subgroupSums;
+  }
+
+  // output gates
+  // TODO include in upper loop
+  std::vector<std::vector<mo::ShareWrapper>> outputs(numberOfGroups);
+  for (std::size_t groupIdx = 0; groupIdx < numberOfInputs; ++groupIdx) {
+      std::size_t subgroupSize = sums[groupIdx].size();
+      std::vector<mo::ShareWrapper> subgroupOutputs(subgroupSize);
+      for (std::size_t subgroupIdx = 0; subgroupIdx < subgroupSize; subgroupIdx++) {
+        subgroupOutputs[subgroupIdx] = resultGroups[groupIdx][subgroupIdx].Out();
+      }
+      outputs[groupIdx] = subgroupOutputs
+  }
+ 
+  std::cout << "Running eval..." << std::endl;
+
+  party->Run();
+  party->Finish();
+
+  //performance statistics
+  encrypto::motion::AccumulatedRunTimeStatistics accumulated_statistics;
+  encrypto::motion::AccumulatedCommunicationStatistics accumulated_communication_statistics;
+
+  const auto& statistics = party->GetBackend()->GetRunTimeStatistics(); // /src/motioncore/statistics/run_time_statistics.h
+  const auto unclear = statistics.front();
+  const auto communcation_statistics = party->GetCommunicationLayer().GetTransportStatistics(); // panda/src/motioncore/communication/transport.h
+
+  accumulated_statistics.Add(unclear);
+  accumulated_communication_statistics.Add(communcation_statistics);
+
+
+  if (party->GetCommunicationLayer().GetMyId() == 0) {
+      std::cout << encrypto::motion::PrintStatistics("Statistics", accumulated_statistics, accumulated_communication_statistics) << std::endl;
+  }
+
+  std::cout << "Finished run. Results: " << std::endl;
+
+  //convert results from binary to int
+  std::vector<std::vector<uint32_t>> results(numberOfGroups);
+  for (std::size_t groupIdx = 0; groupIdx < numberOfGroups; ++groupIdx) {
+      std::size_t subgroupSize = outputs[groupIdx].size();
+      std::vector<uint32_t> subgroupOutputs(subgroupSize);
+      for (std::size_t subgroupIdx = 0; subgroupIdx < subgroupSize; ++subgroupIdx) {
+        auto binary_output{outputs[groupIdx][subgroupIdx].As<std::vector<mo::BitVector<>>>()};
+        auto result = mo::ToOutput<std::uint32_t>(binary_output);
+        subgroupOutputs[subgroupIdx] = result;
+
+        std::cout << " " << result;
+      }
+      results[groupIdx] = subgroupOutputs;
+  }
+
+  return results;
+}
+
+
 uint32_t zeroMaskValue() {
     //TODO There seems to be a bug in MOTION
     // cmp = uint32_t.max() > 5 

@@ -89,6 +89,41 @@ std::vector<uint32_t> perform(std::vector<std::tuple<std::size_t, std::string, s
 }
 
 
+
+std::vector<std::vector<uint32_t>> performWithGroups(std::vector<std::tuple<std::size_t, std::string, std::uint16_t>> parties, std::size_t my_id, std::vector<std::vector<uint32_t>> inputs) {
+  const auto number_of_parties{parties.size()};
+  
+  if (my_id >= number_of_parties) {
+    throw std::runtime_error(fmt::format(
+        "My id needs to be in the range [0, #parties - 1], current my id is {} and #parties is {}",
+        my_id, number_of_parties));
+  }
+  
+  encrypto::motion::communication::TcpPartiesConfiguration parties_configuration(number_of_parties);
+
+  for (const auto party : parties) {
+    const std::size_t party_id = std::get<0>(party);
+    const std::string host = std::get<1>(party);
+    const std::uint16_t port = std::get<2>(party);
+    if (party_id >= number_of_parties) {
+      throw std::runtime_error(
+          fmt::format("Party's id needs to be in the range [0, #parties - 1], current id "
+                      "is {} and #parties is {}",
+                      party_id, number_of_parties));
+    }
+    parties_configuration.at(party_id) = std::make_pair(host, port);
+  }
+
+  encrypto::motion::communication::TcpSetupHelper helper(my_id, parties_configuration);
+  auto communication_layer = std::make_unique<encrypto::motion::communication::CommunicationLayer>(
+      my_id, helper.SetupConnections());
+  auto party = std::make_unique<encrypto::motion::Party>(std::move(communication_layer));
+  auto configuration = party->GetConfiguration();
+  configuration->SetLoggingEnabled(true);
+
+  return EvaluateProtocolArithmeticThenBoolWithGroups(party, inputs, k);
+}
+
 std::vector<uint32_t> performBasic(std::vector<std::tuple<std::size_t, std::string, std::uint16_t>> parties, std::size_t my_id, std::vector<uint32_t> inputs, uint32_t k) {
   return perform(parties, my_id, inputs, k, 1);
 }
@@ -103,6 +138,10 @@ std::vector<uint32_t> performArithmeticThenBool(std::vector<std::tuple<std::size
 
 std::vector<uint32_t> performTreeSumParted(std::vector<std::tuple<std::size_t, std::string, std::uint16_t>> parties, std::size_t my_id, std::vector<uint32_t> inputs, uint32_t k) {
   return perform(parties, my_id, inputs, k, 4);
+}
+
+std::vector<std::vector<uint32_t>> performArithmeticThenBoolWithGroups(std::vector<std::tuple<std::size_t, std::string, std::uint16_t>> parties, std::size_t my_id, std::vector<std::vector<uint32_t>> inputs, uint32_t k) {
+  return performWithGroups(parties, my_id, inputs, k);
 }
 
 uint32_t getZeroMaskValue() {
@@ -121,6 +160,8 @@ PYBIND11_MODULE(pandapython, m) {
 
     m.def("perform_tree_sum_parted", &performTreeSumParted, "Perform parallel sum>k mpc protocol", py::arg("parties"), py::arg("my_id"), py::arg("my_inputs"), py::arg("k"));
     
+    m.def("perform_arithmetic_then_bool_with_groups", &performArithmeticThenBoolWithGroups, "Perform parallel sum>k mpc protocol", py::arg("parties"), py::arg("my_id"), py::arg("my_inputs"), py::arg("k"));
+
     m.def("get_zero_mask_value", &getZeroMaskValue, "The value a zero sum is masked with... for internal reasons -,-");
 }
 
