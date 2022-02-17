@@ -610,9 +610,9 @@ std::vector<std::vector<uint32_t>> EvaluateProtocolArithmeticThenBoolWithGroups(
   std::vector<std::vector<mo::SecureUnsignedInteger>> sums(numberOfGroups);
 
   for (std::size_t groupIdx = 0; groupIdx < numberOfGroups; ++groupIdx) {
-    std::size_t subgroupSize = values[groupIdx].size();
+    std::size_t subgroupSize = inputValues[groupIdx].size();
     std::vector<mo::SecureUnsignedInteger> subgroupSums(subgroupSize);
-    for (std::size_t subgroupIdx = 0; subgroupIdx < numberOfGroups; ++subgroupIdx) {
+    for (std::size_t subgroupIdx = 0; subgroupIdx < subgroupSize; ++subgroupIdx) {
       // build balanced binary tree for each input
       std::vector<mo::SecureUnsignedInteger> partyInputs = inputValues[groupIdx][subgroupIdx];
       while (partyInputs.size() > 1) {
@@ -674,11 +674,11 @@ std::vector<std::vector<uint32_t>> EvaluateProtocolArithmeticThenBoolWithGroups(
       for (std::size_t subgroupIdx = 1; subgroupIdx < subgroupSize; subgroupIdx++) {
         subgroupContainsSmallerK |= subgroupSmallerKComparisons[subgroupIdx];
       }
-
+      
       for (std::size_t subgroupIdx = 0; subgroupIdx < subgroupSize; subgroupIdx++) {
         subgroupSums[subgroupIdx] = subgroupContainsSmallerK.Mux(secureSmallerKMask.Get(), subgroupSums[subgroupIdx].Get());
       }
-
+      
       resultGroups[groupIdx] = subgroupSums;
   }
 
@@ -686,7 +686,7 @@ std::vector<std::vector<uint32_t>> EvaluateProtocolArithmeticThenBoolWithGroups(
   // TODO include in upper loop
   std::vector<std::vector<mo::ShareWrapper>> outputs(numberOfGroups);
   for (std::size_t groupIdx = 0; groupIdx < numberOfGroups; ++groupIdx) {
-      std::size_t subgroupSize = sums[groupIdx].size();
+      std::size_t subgroupSize = resultGroups[groupIdx].size();
       std::vector<mo::ShareWrapper> subgroupOutputs(subgroupSize);
       for (std::size_t subgroupIdx = 0; subgroupIdx < subgroupSize; subgroupIdx++) {
         subgroupOutputs[subgroupIdx] = resultGroups[groupIdx][subgroupIdx].Out();
