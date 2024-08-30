@@ -107,12 +107,10 @@ int main(int ac, char* av[]) {
       auto statistics = EvaluateProtocol(party, combination.number_of_simd_, combination.bit_size_,
                                          combination.protocol_, combination.operation_type_);
       accumulated_statistics.Add(statistics);
-      auto communication_statistics = party->GetCommunicationLayer().GetTransportStatistics();
+      auto communication_statistics =
+          party->GetBackend()->GetCommunicationLayer().GetTransportStatistics();
       accumulated_communication_statistics.Add(communication_statistics);
     }
-    std::cout << fmt::format(encrypto::motion::to_string(combination.protocol_),
-                             encrypto::motion::to_string(combination.operation_type_),
-                             combination.bit_size_, combination.number_of_simd_);
     std::cout << encrypto::motion::PrintStatistics(
         fmt::format("Protocol {} operation {} bit size {} SIMD {}",
                     encrypto::motion::to_string(combination.protocol_),
@@ -155,7 +153,7 @@ std::pair<program_options::variables_map, bool> ParseProgramOptions(int ac, char
       ("print-configuration,p", program_options::bool_switch(&print)->default_value(false), "print configuration")
       ("configuration-file,f", program_options::value<std::string>(), kConfigFileMessage.data())
       ("my-id", program_options::value<std::size_t>(), "my party id")
-      ("other-parties", program_options::value<std::vector<std::string>>()->multitoken(), "(other party id, IP, port, my role), e.g., --other-parties 1,127.0.0.1,7777")
+      ("parties", program_options::value<std::vector<std::string>>()->multitoken(), "info (id,IP,port) for each party e.g., --parties 0,127.0.0.1,23000 1,127.0.0.1,23001")
       ("online-after-setup", program_options::value<bool>()->default_value(true), "compute the online phase of the gate evaluations after the setup phase for all of them is completed (true/1 or false/0)")
       ("repetitions", program_options::value<std::size_t>()->default_value(1), "number of repetitions");
   // clang-format on
@@ -185,9 +183,9 @@ std::pair<program_options::variables_map, bool> ParseProgramOptions(int ac, char
   } else
     throw std::runtime_error("My id is not set but required");
 
-  if (user_options.count("other-parties")) {
+  if (user_options.count("parties")) {
     const std::vector<std::string> other_parties{
-        user_options["other-parties"].as<std::vector<std::string>>()};
+        user_options["parties"].as<std::vector<std::string>>()};
     std::string parties("Other parties: ");
     for (auto& party : other_parties) {
       if (CheckPartyArgumentSyntax(party)) {
@@ -210,7 +208,7 @@ std::pair<program_options::variables_map, bool> ParseProgramOptions(int ac, char
 }
 
 encrypto::motion::PartyPointer CreateParty(const program_options::variables_map& user_options) {
-  const auto parties_string{user_options["other-parties"].as<const std::vector<std::string>>()};
+  const auto parties_string{user_options["parties"].as<const std::vector<std::string>>()};
   const auto number_of_parties{parties_string.size()};
   const auto my_id{user_options["my-id"].as<std::size_t>()};
   if (my_id >= number_of_parties) {

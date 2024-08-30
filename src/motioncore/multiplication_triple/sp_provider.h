@@ -171,7 +171,7 @@ class SpProvider {
 class SpProviderFromOts final : public SpProvider {
  public:
   SpProviderFromOts(std::vector<std::unique_ptr<OtProvider>>& ot_providers, const std::size_t my_id,
-                    Logger& logger, RunTimeStatistics& run_time_statistics);
+                    std::shared_ptr<Logger> logger, RunTimeStatistics& run_time_statistics);
 
   void PreSetup() final override;
 
@@ -186,24 +186,24 @@ class SpProviderFromOts final : public SpProvider {
   std::vector<std::unique_ptr<OtProvider>>& ot_providers_;
 
   // use alternating party roles for load balancing
-  std::vector<std::list<std::unique_ptr<AcOtReceiver<std::uint8_t>>>> ots_receiver_8_;
-  std::vector<std::list<std::unique_ptr<AcOtSender<std::uint8_t>>>> ots_sender_8_;
+  std::vector<std::list<std::unique_ptr<BasicOtReceiver>>> ots_receiver_8_;
+  std::vector<std::list<std::unique_ptr<BasicOtSender>>> ots_sender_8_;
 
-  std::vector<std::list<std::unique_ptr<AcOtReceiver<std::uint16_t>>>> ots_receiver_16_;
-  std::vector<std::list<std::unique_ptr<AcOtSender<std::uint16_t>>>> ots_sender_16_;
+  std::vector<std::list<std::unique_ptr<BasicOtReceiver>>> ots_receiver_16_;
+  std::vector<std::list<std::unique_ptr<BasicOtSender>>> ots_sender_16_;
 
-  std::vector<std::list<std::unique_ptr<AcOtReceiver<std::uint32_t>>>> ots_receiver_32_;
-  std::vector<std::list<std::unique_ptr<AcOtSender<std::uint32_t>>>> ots_sender_32_;
+  std::vector<std::list<std::unique_ptr<BasicOtReceiver>>> ots_receiver_32_;
+  std::vector<std::list<std::unique_ptr<BasicOtSender>>> ots_sender_32_;
 
-  std::vector<std::list<std::unique_ptr<AcOtReceiver<std::uint64_t>>>> ots_receiver_64_;
-  std::vector<std::list<std::unique_ptr<AcOtSender<std::uint64_t>>>> ots_sender_64_;
+  std::vector<std::list<std::unique_ptr<BasicOtReceiver>>> ots_receiver_64_;
+  std::vector<std::list<std::unique_ptr<BasicOtSender>>> ots_sender_64_;
 
-  std::vector<std::list<std::unique_ptr<AcOtReceiver<__uint128_t>>>> ots_receiver_128_;
-  std::vector<std::list<std::unique_ptr<AcOtSender<__uint128_t>>>> ots_sender_128_;
+  std::vector<std::list<std::unique_ptr<BasicOtReceiver>>> ots_receiver_128_;
+  std::vector<std::list<std::unique_ptr<BasicOtSender>>> ots_sender_128_;
 
   const std::size_t kMaxBatchSize{10'000};
 
-  Logger& logger_;
+  std::shared_ptr<Logger> logger_;
   RunTimeStatistics& run_time_statistics_;
 };
 

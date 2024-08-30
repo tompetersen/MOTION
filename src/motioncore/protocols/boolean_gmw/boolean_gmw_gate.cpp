@@ -26,19 +26,21 @@
 #include "boolean_gmw_wire.h"
 
 #include <fmt/format.h>
+#include <span>
 
 #include "base/backend.h"
 #include "base/register.h"
 #include "communication/communication_layer.h"
-#include "communication/output_message.h"
+#include "communication/message.h"
+#include "communication/message_manager.h"
 #include "multiplication_triple/mt_provider.h"
 #include "primitives/sharing_randomness_generator.h"
 #include "utility/helpers.h"
 
 namespace encrypto::motion::proto::boolean_gmw {
 
-InputGate::InputGate(const std::vector<BitVector<>>& input, std::size_t party_id, Backend& backend)
-    : InputGate::Base(backend), input_(input) {
+InputGate::InputGate(std::span<const BitVector<>> input, std::size_t party_id, Backend& backend)
+    : InputGate::Base(backend), input_(std::vector(input.begin(), input.end())) {
   input_owner_id_ = party_id;
   bits_ = input_.size() == 0 ? 0 : input_.at(0).GetSize();
   InitializationHelper();
@@ -60,8 +62,6 @@ void InputGate::InitializationHelper() {
                                          communication_layer.GetNumberOfParties()));
   }
 
-  gate_id_ = _register.NextGateId();
-
   assert(input_.size() > 0u);           // assert >=1 wire
   assert(input_.at(0).GetSize() > 0u);  // assert >=1 SIMD bits
   // assert SIMD lengths of all wires are equal
@@ -75,12 +75,7 @@ void InputGate::InitializationHelper() {
 
   output_wires_.reserve(input_.size());
   for (auto& v : input_) {
-    auto wire = std::make_shared<boolean_gmw::Wire>(v, backend_);
-    output_wires_.push_back(std::static_pointer_cast<motion::Wire>(wire));
-  }
-
-  for (auto& w : output_wires_) {
-    _register.RegisterNextWire(w);
+    output_wires_.push_back(GetRegister().EmplaceWire<boolean_gmw::Wire>(v, backend_));
   }
 
   if constexpr (kDebug) {
@@ -90,15 +85,11 @@ void InputGate::InitializationHelper() {
   }
 }
 
-void InputGate::EvaluateSetup() {
-  GetBaseProvider().WaitForSetup();
-  SetSetupIsReady();
-  GetRegister().IncrementEvaluatedGatesSetupCounter();
-}
+void InputGate::EvaluateSetup() {}
 
 void InputGate::EvaluateOnline() {
-  WaitSetup();
-  assert(setup_is_ready_);
+  // nothing to setup, no need to wait/check
+  GetBaseProvider().WaitSetup();
 
   auto& communication_layer = GetCommunicationLayer();
   auto my_id = communication_layer.GetMyId();
@@ -156,8 +147,6 @@ void InputGate::EvaluateOnline() {
   if constexpr (kVerboseDebug) {
     GetLogger().LogTrace(fmt::format("Evaluated Boolean InputGate with id#{}", gate_id_));
   }
-  SetOnlineIsReady();
-  GetRegister().IncrementEvaluatedGatesOnlineCounter();
 }
 
 const boolean_gmw::SharePointer InputGate::GetOutputAsGmwShare() {
@@ -186,7 +175,6 @@ OutputGate::OutputGate(const motion::SharePointer& parent, std::size_t output_ow
   auto& communication_layer = GetCommunicationLayer();
   auto my_id = communication_layer.GetMyId();
   auto number_of_parties = communication_layer.GetNumberOfParties();
-  auto number_of_simd_values = parent_.at(0)->GetNumberOfSimdValues();
   auto number_of_wires = parent_.size();
 
   if (output_owner >= number_of_parties && output_owner != kAll) {
@@ -195,30 +183,21 @@ OutputGate::OutputGate(const motion::SharePointer& parent, std::size_t output_ow
   }
 
   output_owner_ = output_owner;
-  requires_online_interaction_ = true;
-  gate_type_ = GateType::kInteractive;
-  gate_id_ = GetRegister().NextGateId();
   is_my_output_ = static_cast<std::size_t>(output_owner_) == my_id ||
                   static_cast<std::size_t>(output_owner_) == kAll;
-
-  for (auto& wire : parent_) {
-    RegisterWaitingFor(wire->GetWireId());  // mark this gate as waiting for @param wire
-    wire->RegisterWaitingGate(gate_id_);    // register this gate in @param wire as waiting
-  }
 
   // create output wires
   output_wires_.reserve(number_of_wires);
   for (size_t i = 0; i < number_of_wires; ++i) {
-    auto& w = output_wires_.emplace_back(std::static_pointer_cast<motion::Wire>(
-        std::make_shared<boolean_gmw::Wire>(backend_, number_of_simd_values)));
-    GetRegister().RegisterNextWire(w);
+    output_wires_.emplace_back(GetRegister().EmplaceWire<boolean_gmw::Wire>(
+        backend_, parent_.at(0)->GetNumberOfSimdValues()));
   }
 
   // Tell the DataStorages that we want to receive OutputMessages from the
   // other parties.
   if (is_my_output_) {
-    auto& base_provider = GetBaseProvider();
-    output_message_futures_ = base_provider.RegisterForOutputMessages(gate_id_);
+    output_message_futures_ = GetCommunicationLayer().GetMessageManager().RegisterReceiveAll(
+        communication::MessageType::kOutputMessage, gate_id_);
   }
 
   if constexpr (kDebug) {
@@ -230,16 +209,10 @@ OutputGate::OutputGate(const motion::SharePointer& parent, std::size_t output_ow
   }
 }
 
-void OutputGate::EvaluateSetup() {
-  SetSetupIsReady();
-  GetRegister().IncrementEvaluatedGatesSetupCounter();
-}
+void OutputGate::EvaluateSetup() {}
 
 void OutputGate::EvaluateOnline() {
-  // setup needs to be done first
-  WaitSetup();
-  assert(setup_is_ready_);
-
+  // nothing to setup, no need to wait/check
   // data we need repeatedly
   auto& communication_layer = GetCommunicationLayer();
   auto my_id = communication_layer.GetMyId();
@@ -258,24 +231,29 @@ void OutputGate::EvaluateOnline() {
     output.emplace_back(gmw_wire->GetValues());
   }
 
+  const std::size_t bit_size = output.at(0).GetSize();
+
   // we need to send shares
   if (!is_my_output_ || output_owner_ == kAll) {
     // prepare payloads
-    std::vector<std::vector<uint8_t>> payloads;
-    auto byte_size = output.at(0).GetData().size();
-    for (std::size_t i = 0; i < number_of_wires; ++i) {
-      const auto data_pointer = reinterpret_cast<const uint8_t*>(output.at(i).GetData().data());
-      payloads.emplace_back(data_pointer, data_pointer + byte_size);
-    }
+    BitVector<> buffer;
+    buffer.Reserve(bit_size * number_of_wires);
+    for (auto& o : output) buffer.Append(o);
     // we need to send shares to one other party:
     if (!is_my_output_) {
-      auto output_message = communication::BuildOutputMessage(gate_id_, payloads);
-      communication_layer.SendMessage(output_owner_, std::move(output_message));
+      std::span s(reinterpret_cast<const std::uint8_t*>(buffer.GetData().data()),
+                  buffer.GetData().size());
+      auto msg{
+          communication::BuildMessage(communication::MessageType::kOutputMessage, gate_id_, s)};
+      communication_layer.SendMessage(output_owner_, msg.Release());
     }
     // we need to send shares to all other parties:
     else if (output_owner_ == kAll) {
-      auto output_message = communication::BuildOutputMessage(gate_id_, payloads);
-      communication_layer.BroadcastMessage(std::move(output_message));
+      std::span s(reinterpret_cast<const std::uint8_t*>(buffer.GetData().data()),
+                  buffer.GetData().size());
+      auto msg{
+          communication::BuildMessage(communication::MessageType::kOutputMessage, gate_id_, s)};
+      communication_layer.BroadcastMessage(msg.Release());
     }
   }
 
@@ -292,18 +270,17 @@ void OutputGate::EvaluateOnline() {
       shared_outputs.at(i).reserve(number_of_wires);
 
       // Retrieve the received messsage or wait until it has arrived.
-      const auto output_message = output_message_futures_.at(i).get();
+      const auto output_message = output_message_futures_[i > my_id ? i - 1 : i].get();
       auto message = communication::GetMessage(output_message.data());
-      auto output_message_pointer = communication::GetOutputMessage(message->payload()->data());
-      assert(output_message_pointer);
-      assert(output_message_pointer->wires()->size() == number_of_wires);
+      BitSpan bit_span(const_cast<std::uint8_t*>(message->payload()->data()),
+                       bit_size * number_of_wires);
 
       // handle each wire
       for (std::size_t j = 0; j < number_of_wires; ++j) {
-        auto payload = output_message_pointer->wires()->Get(j)->payload();
-        auto ptr = reinterpret_cast<const std::byte*>(payload->data());
-        // load payload into a vector of bytes ...
-        std::vector<std::byte> byte_vector(ptr, ptr + payload->size());
+        // copy the subset to a bit vector
+        auto subset_bv = bit_span.Subset(j * bit_size, (j + 1) * bit_size);
+        // steal the data
+        auto byte_vector = std::move(subset_bv.GetMutableData());
         // ... and construct a new BitVector
         shared_outputs.at(i).emplace_back(std::move(byte_vector),
                                           parent_.at(0)->GetNumberOfSimdValues());
@@ -345,8 +322,6 @@ void OutputGate::EvaluateOnline() {
   if constexpr (kDebug) {
     GetLogger().LogDebug(fmt::format("Evaluated Boolean OutputGate with id#{}", gate_id_));
   }
-  SetOnlineIsReady();
-  GetRegister().IncrementEvaluatedGatesOnlineCounter();
 }
 
 const boolean_gmw::SharePointer OutputGate::GetOutputAsGmwShare() const {
@@ -370,31 +345,13 @@ XorGate::XorGate(const motion::SharePointer& a, const motion::SharePointer& b)
   assert(parent_a_.size() == parent_b_.size());
   assert(parent_a_.at(0)->GetBitLength() > 0);
 
-  requires_online_interaction_ = false;
-  gate_type_ = GateType::kNonInteractive;
-
-  auto& _register = GetRegister();
-  gate_id_ = _register.NextGateId();
-
-  for (auto& wire : parent_a_) {
-    RegisterWaitingFor(wire->GetWireId());
-    wire->RegisterWaitingGate(gate_id_);
-  }
-
-  for (auto& wire : parent_b_) {
-    RegisterWaitingFor(wire->GetWireId());
-    wire->RegisterWaitingGate(gate_id_);
-  }
-
   auto number_of_wires = parent_a_.size();
-  auto number_of_simd_values = a->GetNumberOfSimdValues();
 
   // create output wires
   output_wires_.reserve(number_of_wires);
   for (size_t i = 0; i < number_of_wires; ++i) {
-    auto& w = output_wires_.emplace_back(std::static_pointer_cast<motion::Wire>(
-        std::make_shared<boolean_gmw::Wire>(backend_, number_of_simd_values)));
-    GetRegister().RegisterNextWire(w);
+    output_wires_.emplace_back(
+        GetRegister().EmplaceWire<boolean_gmw::Wire>(backend_, a->GetNumberOfSimdValues()));
   }
 
   if constexpr (kDebug) {
@@ -405,15 +362,10 @@ XorGate::XorGate(const motion::SharePointer& a, const motion::SharePointer& b)
   }
 }
 
-void XorGate::EvaluateSetup() {
-  SetSetupIsReady();
-  GetRegister().IncrementEvaluatedGatesSetupCounter();
-}
+void XorGate::EvaluateSetup() {}
 
 void XorGate::EvaluateOnline() {
-  WaitSetup();
-  assert(setup_is_ready_);
-
+  // nothing to setup, no need to wait/check
   for (auto& wire : parent_a_) {
     wire->GetIsReadyCondition().Wait();
   }
@@ -441,8 +393,6 @@ void XorGate::EvaluateOnline() {
   if constexpr (kVerboseDebug) {
     GetLogger().LogTrace(fmt::format("Evaluated BooleanGMW XOR Gate with id#{}", gate_id_));
   }
-  SetOnlineIsReady();
-  GetRegister().IncrementEvaluatedGatesOnlineCounter();
 }
 
 const boolean_gmw::SharePointer XorGate::GetOutputAsGmwShare() const {
@@ -463,26 +413,13 @@ InvGate::InvGate(const motion::SharePointer& parent) : OneGate(parent->GetBacken
   assert(parent_.size() > 0);
   assert(parent_.at(0)->GetBitLength() > 0);
 
-  requires_online_interaction_ = false;
-  gate_type_ = GateType::kNonInteractive;
-
-  auto& _register = GetRegister();
-  gate_id_ = _register.NextGateId();
-
-  for (auto& wire : parent_) {
-    RegisterWaitingFor(wire->GetWireId());
-    wire->RegisterWaitingGate(gate_id_);
-  }
-
   auto number_of_wires = parent_.size();
-  auto number_of_simd_values = parent->GetNumberOfSimdValues();
 
   // create output wires
   output_wires_.reserve(number_of_wires);
   for (size_t i = 0; i < number_of_wires; ++i) {
-    auto& w = output_wires_.emplace_back(std::static_pointer_cast<motion::Wire>(
-        std::make_shared<boolean_gmw::Wire>(backend_, number_of_simd_values)));
-    GetRegister().RegisterNextWire(w);
+    output_wires_.emplace_back(
+        GetRegister().EmplaceWire<boolean_gmw::Wire>(backend_, parent->GetNumberOfSimdValues()));
   }
 
   if constexpr (kDebug) {
@@ -495,15 +432,10 @@ InvGate::InvGate(const motion::SharePointer& parent) : OneGate(parent->GetBacken
   }
 }
 
-void InvGate::EvaluateSetup() {
-  SetSetupIsReady();
-  GetRegister().IncrementEvaluatedGatesSetupCounter();
-}
+void InvGate::EvaluateSetup() {}
 
 void InvGate::EvaluateOnline() {
-  WaitSetup();
-  assert(setup_is_ready_);
-
+  // nothing to setup, no need to wait/check
   for (auto i = 0ull; i < parent_.size(); ++i) {
     auto wire = std::dynamic_pointer_cast<const boolean_gmw::Wire>(parent_.at(i));
     assert(wire);
@@ -518,8 +450,6 @@ void InvGate::EvaluateOnline() {
   if constexpr (kVerboseDebug) {
     GetLogger().LogTrace(fmt::format("Evaluated BooleanGMW INV Gate with id#{}", gate_id_));
   }
-  SetOnlineIsReady();
-  GetRegister().IncrementEvaluatedGatesOnlineCounter();
 }
 
 const boolean_gmw::SharePointer InvGate::GetOutputAsGmwShare() const {
@@ -546,55 +476,35 @@ AndGate::AndGate(const motion::SharePointer& a, const motion::SharePointer& b)
   auto number_of_wires = parent_a_.size();
   auto number_of_simd_values = a->GetNumberOfSimdValues();
 
-  requires_online_interaction_ = true;
-  gate_type_ = GateType::kInteractive;
-
   std::vector<motion::WirePointer> dummy_wires_e(number_of_wires), dummy_wires_d(number_of_wires);
 
   auto& _register = GetRegister();
 
   for (auto& w : dummy_wires_d) {
-    w = std::make_shared<boolean_gmw::Wire>(backend_, number_of_simd_values);
-    _register.RegisterNextWire(w);
+    w = _register.EmplaceWire<boolean_gmw::Wire>(backend_, number_of_simd_values);
   }
 
   for (auto& w : dummy_wires_e) {
-    w = std::make_shared<boolean_gmw::Wire>(backend_, number_of_simd_values);
-    _register.RegisterNextWire(w);
+    w = _register.EmplaceWire<boolean_gmw::Wire>(backend_, number_of_simd_values);
   }
 
+  // TODO: replace Gate objects with Futures from CommunicationManager
   d_ = std::make_shared<boolean_gmw::Share>(dummy_wires_d);
   e_ = std::make_shared<boolean_gmw::Share>(dummy_wires_e);
 
-  d_output_ = std::make_shared<OutputGate>(d_);
-  e_output_ = std::make_shared<OutputGate>(e_);
-
-  _register.RegisterNextGate(d_output_);
-  _register.RegisterNextGate(e_output_);
-
-  gate_id_ = _register.NextGateId();
-
-  for (auto& wire : parent_a_) {
-    RegisterWaitingFor(wire->GetWireId());
-    wire->RegisterWaitingGate(gate_id_);
-  }
-
-  for (auto& wire : parent_b_) {
-    RegisterWaitingFor(wire->GetWireId());
-    wire->RegisterWaitingGate(gate_id_);
-  }
+  d_output_ = _register.EmplaceGate<OutputGate>(d_);
+  e_output_ = _register.EmplaceGate<OutputGate>(e_);
 
   // create output wires
   output_wires_.reserve(number_of_wires);
   for (size_t i = 0; i < number_of_wires; ++i) {
-    auto& w = output_wires_.emplace_back(std::static_pointer_cast<motion::Wire>(
-        std::make_shared<boolean_gmw::Wire>(backend_, number_of_simd_values)));
-    GetRegister().RegisterNextWire(w);
+    output_wires_.emplace_back(
+        GetRegister().EmplaceWire<boolean_gmw::Wire>(backend_, number_of_simd_values));
   }
 
   auto& mt_provider = backend_.GetMtProvider();
   mt_bitlen_ = parent_a_.size() * parent_a_.at(0)->GetNumberOfSimdValues();
-  mt_offset_ = mt_provider->RequestBinaryMts(mt_bitlen_);
+  mt_offset_ = mt_provider.RequestBinaryMts(mt_bitlen_);
 
   if constexpr (kDebug) {
     auto gate_info = fmt::format("gate id {}, parents: {}, {}", gate_id_,
@@ -604,13 +514,10 @@ AndGate::AndGate(const motion::SharePointer& a, const motion::SharePointer& b)
   }
 }
 
-void AndGate::EvaluateSetup() {
-  SetSetupIsReady();
-  GetRegister().IncrementEvaluatedGatesSetupCounter();
-}
+void AndGate::EvaluateSetup() {}
 
 void AndGate::EvaluateOnline() {
-  WaitSetup();
+  // nothing to setup, no need to wait/check
   for (auto& wire : parent_a_) {
     wire->GetIsReadyCondition().Wait();
   }
@@ -693,8 +600,6 @@ void AndGate::EvaluateOnline() {
   if constexpr (kVerboseDebug) {
     GetLogger().LogTrace(fmt::format("Evaluated BooleanGMW AND Gate with id#{}", gate_id_));
   }
-  SetOnlineIsReady();
-  GetRegister().IncrementEvaluatedGatesOnlineCounter();
 }
 
 const boolean_gmw::SharePointer AndGate::GetOutputAsGmwShare() const {
@@ -721,27 +626,6 @@ MuxGate::MuxGate(const motion::SharePointer& a, const motion::SharePointer& b,
   assert(parent_c_.size() == 1);
   assert(parent_a_.at(0)->GetBitLength() > 0);
 
-  requires_online_interaction_ = true;
-  gate_type_ = GateType::kInteractive;
-
-  auto& _register = GetRegister();
-  gate_id_ = _register.NextGateId();
-
-  for (auto& wire : parent_a_) {
-    RegisterWaitingFor(wire->GetWireId());
-    wire->RegisterWaitingGate(gate_id_);
-  }
-
-  for (auto& wire : parent_b_) {
-    RegisterWaitingFor(wire->GetWireId());
-    wire->RegisterWaitingGate(gate_id_);
-  }
-
-  for (auto& wire : parent_c_) {
-    RegisterWaitingFor(wire->GetWireId());
-    wire->RegisterWaitingGate(gate_id_);
-  }
-
   auto number_of_wires = parent_a_.size();
   auto number_of_simd_values = a->GetNumberOfSimdValues();
 
@@ -750,9 +634,7 @@ MuxGate::MuxGate(const motion::SharePointer& a, const motion::SharePointer& b,
   output_wires_.reserve(number_of_wires);
   BitVector dummy_bv(number_of_simd_values);
   for (size_t i = 0; i < number_of_wires; ++i) {
-    auto& w = output_wires_.emplace_back(std::static_pointer_cast<motion::Wire>(
-        std::make_shared<boolean_gmw::Wire>(dummy_bv, backend_)));
-    GetRegister().RegisterNextWire(w);
+    output_wires_.emplace_back(GetRegister().EmplaceWire<boolean_gmw::Wire>(dummy_bv, backend_));
   }
 
   const auto& communication_layer = GetCommunicationLayer();
@@ -779,13 +661,10 @@ MuxGate::MuxGate(const motion::SharePointer& a, const motion::SharePointer& b,
   }
 }
 
-void MuxGate::EvaluateSetup() {
-  SetSetupIsReady();
-  GetRegister().IncrementEvaluatedGatesSetupCounter();
-}
+void MuxGate::EvaluateSetup() {}
 
 void MuxGate::EvaluateOnline() {
-  WaitSetup();
+  // nothing to setup, no need to wait/check
   for (auto& wire : parent_a_) {
     wire->GetIsReadyCondition().Wait();
   }
@@ -871,8 +750,6 @@ void MuxGate::EvaluateOnline() {
   if constexpr (kVerboseDebug) {
     GetLogger().LogTrace(fmt::format("Evaluated BooleanGMW AND Gate with id#{}", gate_id_));
   }
-  SetOnlineIsReady();
-  GetRegister().IncrementEvaluatedGatesOnlineCounter();
 }
 
 const boolean_gmw::SharePointer MuxGate::GetOutputAsGmwShare() const {

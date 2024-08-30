@@ -60,6 +60,8 @@ class BmrToBooleanGmwGate final : public OneGate {
 
   void EvaluateOnline() final override;
 
+  bool NeedsSetup() const override { return false; }
+
   const proto::boolean_gmw::SharePointer GetOutputAsGmwShare() const;
 
   const SharePointer GetOutputAsShare() const;
@@ -88,8 +90,8 @@ class BooleanGmwToBmrGate final : public OneGate {
   BooleanGmwToBmrGate(const Gate&) = delete;
 
  private:
-  std::vector<ReusableFiberFuture<BitVector<>>> received_public_values_;
-  std::vector<ReusableFiberFuture<Block128Vector>> received_public_keys_;
+  std::vector<ReusableFiberFuture<std::vector<std::uint8_t>>> received_public_values_;
+  std::vector<ReusableFiberFuture<std::vector<std::uint8_t>>> received_public_keys_;
 };
 
 class ArithmeticGmwToBmrGate final : public OneGate {
@@ -101,6 +103,8 @@ class ArithmeticGmwToBmrGate final : public OneGate {
   void EvaluateSetup() final override;
 
   void EvaluateOnline() final override;
+
+  bool NeedsSetup() const override { return false; }
 
   const proto::bmr::SharePointer GetOutputAsBmrShare() const;
 

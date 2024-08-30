@@ -64,7 +64,7 @@ MtProvider::MtProvider(const std::size_t my_id, const std::size_t number_of_part
 }
 
 MtProviderFromOts::MtProviderFromOts(std::vector<std::unique_ptr<OtProvider>>& ot_providers,
-                                     const std::size_t my_id, Logger& logger,
+                                     const std::size_t my_id, std::shared_ptr<Logger> logger,
                                      RunTimeStatistics& run_time_statistics)
     : MtProvider(my_id, ot_providers.size()),
       ot_providers_(ot_providers),
@@ -89,7 +89,7 @@ void MtProviderFromOts::PreSetup() {
   }
 
   if constexpr (kDebug) {
-    logger_.LogDebug("Start computing presetup for MTs");
+    logger_->LogDebug("Start computing presetup for MTs");
   }
   run_time_statistics_.RecordStart<RunTimeStatistics::StatisticsId::kMtPresetup>();
 
@@ -97,7 +97,7 @@ void MtProviderFromOts::PreSetup() {
 
   run_time_statistics_.RecordEnd<RunTimeStatistics::StatisticsId::kMtPresetup>();
   if constexpr (kDebug) {
-    logger_.LogDebug("Finished computing presetup for MTs");
+    logger_->LogDebug("Finished computing presetup for MTs");
   }
 }
 
@@ -108,7 +108,7 @@ void MtProviderFromOts::Setup() {
   }
 
   if constexpr (kDebug) {
-    logger_.LogDebug("Start computing setup for MTs");
+    logger_->LogDebug("Start computing setup for MTs");
   }
   run_time_statistics_.RecordStart<RunTimeStatistics::StatisticsId::kMtSetup>();
 
@@ -116,13 +116,21 @@ void MtProviderFromOts::Setup() {
     if (i == my_id_) {
       continue;
     }
-    for (auto& ot : ots_sender_8_.at(i)) ot->SendMessages();
+    for (auto& ot : ots_sender_8_.at(i)) {
+      dynamic_cast<AcOtSender<std::uint8_t>*>(ot.get())->SendMessages();
+    }
     for (auto& ot : ots_receiver_8_.at(i)) ot->SendCorrections();
-    for (auto& ot : ots_sender_16_.at(i)) ot->SendMessages();
+    for (auto& ot : ots_sender_16_.at(i)) {
+      dynamic_cast<AcOtSender<std::uint16_t>*>(ot.get())->SendMessages();
+    }
     for (auto& ot : ots_receiver_16_.at(i)) ot->SendCorrections();
-    for (auto& ot : ots_sender_32_.at(i)) ot->SendMessages();
+    for (auto& ot : ots_sender_32_.at(i)) {
+      dynamic_cast<AcOtSender<std::uint32_t>*>(ot.get())->SendMessages();
+    }
     for (auto& ot : ots_receiver_32_.at(i)) ot->SendCorrections();
-    for (auto& ot : ots_sender_64_.at(i)) ot->SendMessages();
+    for (auto& ot : ots_sender_64_.at(i)) {
+      dynamic_cast<AcOtSender<std::uint64_t>*>(ot.get())->SendMessages();
+    }
     for (auto& ot : ots_receiver_64_.at(i)) ot->SendCorrections();
 
     if (number_of_bit_mts_ > 0) {
@@ -143,7 +151,7 @@ void MtProviderFromOts::Setup() {
 
   run_time_statistics_.RecordEnd<RunTimeStatistics::StatisticsId::kMtSetup>();
   if constexpr (kDebug) {
-    logger_.LogDebug("Finished computing setup for MTs");
+    logger_->LogDebug("Finished computing setup for MTs");
   }
 }
 
@@ -178,15 +186,16 @@ static void RegisterHelperBool(OtProvider& ot_provider, std::unique_ptr<XcOtBitS
 
 template <typename T>
 static void RegisterHelper(OtProvider& ot_provider,
-                           std::list<std::unique_ptr<AcOtSender<T>>>& ots_sender,
-                           std::list<std::unique_ptr<AcOtReceiver<T>>>& ots_receiver,
+                           std::list<std::unique_ptr<BasicOtSender>>& ots_sender,
+                           std::list<std::unique_ptr<BasicOtReceiver>>& ots_receiver,
                            std::size_t max_batch_size, const IntegerMtVector<T>& mts,
                            std::size_t number_of_mts) {
   constexpr std::size_t bit_size = sizeof(T) * 8;
 
   for (std::size_t mt_id = 0; mt_id < number_of_mts;) {
     const auto batch_size = std::min(max_batch_size, number_of_mts - mt_id);
-    auto ot_to_send = ot_provider.template RegisterSendAcOt<T>(batch_size * bit_size);
+    auto ptr_send{ot_provider.RegisterSendAcOt(batch_size * bit_size, sizeof(T) * 8)};
+    auto ot_to_send = dynamic_cast<AcOtSender<T>*>(ptr_send.get());
     std::vector<T> vector_to_send;
     vector_to_send.reserve(batch_size * bit_size);
     for (auto k = 0ull; k < batch_size; ++k) {
@@ -197,7 +206,8 @@ static void RegisterHelper(OtProvider& ot_provider,
     }
     ot_to_send->SetCorrelations(std::move(vector_to_send));
 
-    auto ot_to_receive = ot_provider.template RegisterReceiveAcOt<T>(batch_size * bit_size);
+    auto ptr_receive{ot_provider.RegisterReceiveAcOt(batch_size * bit_size, sizeof(T) * 8)};
+    auto ot_to_receive = dynamic_cast<AcOtReceiver<T>*>(ptr_receive.get());
     BitVector<> choices;
     choices.Reserve(batch_size * bit_size);
     for (auto k = 0ull; k < batch_size; ++k) {
@@ -208,8 +218,8 @@ static void RegisterHelper(OtProvider& ot_provider,
     }
     ot_to_receive->SetChoices(std::move(choices));
 
-    ots_sender.emplace_back(std::move(ot_to_send));
-    ots_receiver.emplace_back(std::move(ot_to_receive));
+    ots_sender.emplace_back(std::move(ptr_send));
+    ots_receiver.emplace_back(std::move(ptr_receive));
 
     mt_id += batch_size;
   }
@@ -255,16 +265,16 @@ static void ParseHelperBool(std::unique_ptr<XcOtBitSender>& ots_sender,
 }
 
 template <typename T>
-static void ParseHelper(std::list<std::unique_ptr<AcOtSender<T>>>& ots_sender,
-                        std::list<std::unique_ptr<AcOtReceiver<T>>>& ots_receiver,
+static void ParseHelper(std::list<std::unique_ptr<BasicOtSender>>& ots_sender,
+                        std::list<std::unique_ptr<BasicOtReceiver>>& ots_receiver,
                         std::size_t max_batch_size, IntegerMtVector<T>& mts,
                         std::size_t number_of_mts) {
   constexpr std::size_t bit_size = sizeof(T) * 8;
 
   for (std::size_t mt_id = 0; mt_id < number_of_mts;) {
     const auto batch_size = std::min(max_batch_size, number_of_mts - mt_id);
-    const auto& ot_to_send = ots_sender.front();
-    const auto& ot_to_receive = ots_receiver.front();
+    const auto& ot_to_send = dynamic_cast<AcOtSender<T>*>(ots_sender.front().get());
+    const auto& ot_to_receive = dynamic_cast<AcOtReceiver<T>*>(ots_receiver.front().get());
     ot_to_send->ComputeOutputs();
     const auto& output_sender = ot_to_send->GetOutputs();
     ot_to_receive->ComputeOutputs();

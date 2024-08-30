@@ -1,6 +1,6 @@
 // MIT License
 //
-// Copyright (c) 2019 Oleksandr Tkachenko, Lennart Braun
+// Copyright (c) 2019-2022 Oleksandr Tkachenko, Lennart Braun, Arianne Roselina Prananto
 // Cryptography and Privacy Engineering Group (ENCRYPTO)
 // TU Darmstadt, Germany
 //
@@ -45,7 +45,6 @@ Register::Register(std::shared_ptr<Logger> logger) : logger_(std::move(logger)) 
 }
 
 Register::~Register() {
-  input_gates_.clear();
   gates_.clear();
   wires_.clear();
 }
@@ -74,46 +73,29 @@ std::size_t Register::NextBooleanGmwSharingId(std::size_t number_of_parallel_val
   return old_id;
 }
 
-void Register::RegisterNextGate(GatePointer gate) {
+void Register::RegisterGate(const GatePointer& gate) {
   assert(gate != nullptr);
+  if (gate->NeedsSetup()) {
+    gates_setup_++;
+  }
+  if (gate->NeedsOnline()) {
+    gates_online_++;
+  }
   gates_.push_back(gate);
 }
 
-void Register::RegisterNextInputGate(GatePointer gate) {
-  RegisterNextGate(gate);
-  assert(gate != nullptr);
-  input_gates_.push_back(gate);
-}
-
-void Register::AddToActiveQueue(std::size_t gate_id) {
-  std::scoped_lock lock(active_queue_mutex_);
-  active_gates_.push(gate_id);
-  if constexpr (kVerboseDebug) {
-    logger_->LogTrace(fmt::format("Added gate #{} to the active queue", gate_id));
-  }
-}
-
-void Register::ClearActiveQueue() {
-  logger_->LogDebug("Clearing active queue");
-  std::scoped_lock lock(active_queue_mutex_);
-  active_gates_ = {};
-}
-
-std::int64_t Register::GetNextGateFromActiveQueue() {
-  std::scoped_lock lock(active_queue_mutex_);
-  if (active_gates_.empty()) {
-    return -1;
-  } else {
-    const auto gate_id = active_gates_.front();
-    assert(gate_id < static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()));
-    active_gates_.pop();
-    return static_cast<std::int64_t>(gate_id);
-  }
-}
-
 void Register::IncrementEvaluatedGatesSetupCounter() {
-  auto number_of_evaluated_gates_setup = ++evaluated_gates_setup_;
-  if (number_of_evaluated_gates_setup == gates_.size()) {
+  ++evaluated_gates_setup_;
+  CheckSetupCondition();
+}
+
+void Register::IncrementEvaluatedGatesOnlineCounter() {
+  ++evaluated_gates_online_;
+  CheckOnlineCondition();
+}
+
+void Register::CheckSetupCondition() {
+  if (evaluated_gates_setup_ == gates_setup_) {
     {
       std::scoped_lock lock(gates_setup_done_condition_->GetMutex());
       gates_setup_done_flag_ = true;
@@ -122,9 +104,8 @@ void Register::IncrementEvaluatedGatesSetupCounter() {
   }
 }
 
-void Register::IncrementEvaluatedGatesOnlineCounter() {
-  auto number_of_evaluated_gates_setup = ++evaluated_gates_online_;
-  if (number_of_evaluated_gates_setup == gates_.size()) {
+void Register::CheckOnlineCondition() {
+  if (evaluated_gates_online_ == gates_online_) {
     {
       std::scoped_lock lock(gates_online_done_condition_->GetMutex());
       gates_online_done_flag_ = true;
@@ -134,12 +115,12 @@ void Register::IncrementEvaluatedGatesOnlineCounter() {
 }
 
 void Register::Reset() {
-  if (evaluated_gates_online_ != gates_.size()) {
+  if (evaluated_gates_setup_ != gates_setup_ || evaluated_gates_online_ != gates_online_) {
     throw(std::runtime_error("Register::Reset evaluated_gates_ != gates_.size()"));
   }
 
-  assert(active_gates_.empty());
-  assert(evaluated_gates_online_ == gates_.size());
+  assert(evaluated_gates_setup_ == gates_setup_);
+  assert(evaluated_gates_online_ == gates_online_);
   if (!gates_.empty()) {
     gate_id_offset_ = global_gate_id_;
   }
@@ -150,20 +131,21 @@ void Register::Reset() {
 
   wires_.clear();
   gates_.clear();
-  input_gates_.clear();
 
   evaluated_gates_setup_ = 0;
   evaluated_gates_online_ = 0;
   gates_setup_done_flag_ = false;
   gates_online_done_flag_ = false;
+  
+  
 }
 
 void Register::Clear() {
-  if (evaluated_gates_online_ != gates_.size()) {
+  if (evaluated_gates_setup_ != gates_setup_ || evaluated_gates_online_ != gates_online_) {
     throw(std::runtime_error("Register::Reset evaluated_gates_ != gates_.size()"));
   }
-  assert(active_gates_.empty());
-  assert(evaluated_gates_online_ == gates_.size());
+  assert(evaluated_gates_setup_ == gates_setup_);
+  assert(evaluated_gates_online_ == gates_online_);
   for (auto& gate : gates_) {
     gate->Clear();
   }

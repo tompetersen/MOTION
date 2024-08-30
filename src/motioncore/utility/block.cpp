@@ -24,12 +24,13 @@
 #include <algorithm>
 #include <boost/algorithm/hex.hpp>
 #include <cassert>
-#include "primitives/random/aes128_ctr_rng.h"
+#include "primitives/random/default_rng.h"
+
 
 namespace encrypto::motion {
 
 void Block128::SetToRandom() {
-  auto& rng = Aes128CtrRng::GetThreadInstance();
+  auto& rng = DefaultRng::GetThreadInstance();
   rng.RandomBlocksAligned(byte_array.data(), 1);
 }
 
@@ -44,7 +45,7 @@ std::string Block128::AsString() const {
 }
 
 void Block128Vector::SetToRandom() {
-  auto& rng = Aes128CtrRng::GetThreadInstance();
+  auto& rng = DefaultRng::GetThreadInstance();
   rng.RandomBlocksAligned(reinterpret_cast<std::byte*>(block_vector.data()), block_vector.size());
 }
 

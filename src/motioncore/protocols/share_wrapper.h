@@ -24,14 +24,11 @@
 
 #pragma once
 
-#include <cassert>
 #include <limits>
 #include <memory>
 #include <span>
 #include <vector>
 
-#include "share.h"
-#include "utility/bit_vector.h"
 #include "utility/typedefs.h"
 
 namespace encrypto::motion {
@@ -94,8 +91,13 @@ class ShareWrapper {
     *this = *this * other;
     return *this;
   }
+  
+  friend ShareWrapper DotProduct(std::span<ShareWrapper> a, std::span<ShareWrapper> b);
+
 
   ShareWrapper operator==(const ShareWrapper& other) const;
+
+  ShareWrapper operator>(const ShareWrapper& other) const;
 
   // use this as the selection bit
   // returns this ? a : b
@@ -211,7 +213,16 @@ class ShareWrapper {
   ShareWrapper Mul(SharePointer share, SharePointer other) const;
 
   template <typename T>
+  ShareWrapper HybridMul(SharePointer share, SharePointer other) const;
+
+  template <typename T>
+  ShareWrapper GreaterThan(SharePointer share, SharePointer other) const;
+
+  template <typename T>
   ShareWrapper Square(SharePointer share) const;
+  
+  template <typename T>
+  ShareWrapper DotProduct(std::span<ShareWrapper> a, std::span<ShareWrapper> b) const;
 
   ShareWrapper ArithmeticGmwToBmr() const;
 
@@ -223,5 +234,7 @@ class ShareWrapper {
 
   void ShareConsistencyCheck() const;
 };
+
+ShareWrapper DotProduct(std::span<ShareWrapper> a, std::span<ShareWrapper> b);
 
 }  // namespace encrypto::motion

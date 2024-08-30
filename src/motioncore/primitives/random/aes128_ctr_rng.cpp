@@ -21,8 +21,14 @@
 // SOFTWARE.
 
 #include "aes128_ctr_rng.h"
+
+#include <array>
 #include <fstream>
+#include <openssl/rand.h>
+
 #include "primitives/aes/aesni_primitives.h"
+
+namespace encrypto::motion {
 
 thread_local Aes128CtrRng Aes128CtrRng::thread_instance_;
 
@@ -36,17 +42,11 @@ Aes128CtrRng::Aes128CtrRng() : state_(std::make_unique<Aes128CtrRngState>()) { S
 Aes128CtrRng::~Aes128CtrRng() = default;
 
 void Aes128CtrRng::SampleKey() {
-  // read key from /dev/urandom
-  std::ifstream urandom("/dev/urandom", std::ios::in | std::ios::binary);
-  if (!urandom) {
-    throw std::runtime_error("Failed to open /dev/urandom");
+  int random =
+      RAND_bytes(reinterpret_cast<unsigned char*>(state_->round_keys.data()), kAesBlockSize);
+  if (random != 1) {
+    throw std::runtime_error("RAND_bytes in Aes128CtrRng::SampleKey failed");
   }
-  urandom.read(reinterpret_cast<char*>(state_->round_keys.data()),
-               static_cast<std::streamsize>(kAesBlockSize));
-  if (!urandom) {
-    throw std::runtime_error("Failed to read from /dev/urandom");
-  }
-  urandom.close();
 
   // execute key schedule
   AesniKeyExpansion128(state_->round_keys.data());
@@ -76,3 +76,5 @@ void Aes128CtrRng::RandomBytes(std::byte* output, std::size_t number_of_bytes) {
   std::copy(std::begin(extra_block), std::begin(extra_block) + remaining_bytes,
             output + number_of_bytes - remaining_bytes);
 }
+
+}  //  namespace encrypto::motion

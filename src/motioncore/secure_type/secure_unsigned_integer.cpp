@@ -1,6 +1,6 @@
 // MIT License
 //
-// Copyright (c) 2019 Oleksandr Tkachenko
+// Copyright (c) 2021 Oleksandr Tkachenko, Arianne Roselina Prananto
 // Cryptography and Privacy Engineering Group (ENCRYPTO)
 // TU Darmstadt, Germany
 //
@@ -25,9 +25,12 @@
 #include "secure_unsigned_integer.h"
 
 #include <fmt/format.h>
+#include <iterator>
 
 #include "algorithm/algorithm_description.h"
+#include "base/backend.h"
 #include "base/register.h"
+#include "protocols/data_management/unsimdify_gate.h"
 #include "utility/constants.h"
 #include "utility/logger.h"
 
@@ -50,7 +53,9 @@ SecureUnsignedInteger SecureUnsignedInteger::operator+(const SecureUnsignedInteg
     std::shared_ptr<AlgorithmDescription> addition_algorithm;
     std::string path;
 
-    if (share_->Get()->GetProtocol() == MpcProtocol::kBmr)  // BMR, use size-optimized circuit
+    if (share_->Get()->GetProtocol() == MpcProtocol::kBmr ||
+        share_->Get()->GetProtocol() ==
+            MpcProtocol::kGarbledCircuit)  // BMR, use size-optimized circuit
       path = ConstructPath(IntegerOperationType::kAdd, bitlength, "_size");
     else  // GMW, use depth-optimized circuit
       path = ConstructPath(IntegerOperationType::kAdd, bitlength, "_depth");
@@ -82,7 +87,9 @@ SecureUnsignedInteger SecureUnsignedInteger::operator-(const SecureUnsignedInteg
     std::shared_ptr<AlgorithmDescription> subtraction_algorithm;
     std::string path;
 
-    if (share_->Get()->GetProtocol() == MpcProtocol::kBmr)  // BMR, use size-optimized circuit
+    if (share_->Get()->GetProtocol() == MpcProtocol::kBmr ||
+        share_->Get()->GetProtocol() ==
+            MpcProtocol::kGarbledCircuit)  // BMR, use size-optimized circuit
       path = ConstructPath(IntegerOperationType::kSub, bitlength, "_size");
     else  // GMW, use depth-optimized circuit
       path = ConstructPath(IntegerOperationType::kSub, bitlength, "_depth");
@@ -115,7 +122,9 @@ SecureUnsignedInteger SecureUnsignedInteger::operator*(const SecureUnsignedInteg
     std::shared_ptr<AlgorithmDescription> multiplication_algorithm;
     std::string path;
 
-    if (share_->Get()->GetProtocol() == MpcProtocol::kBmr)  // BMR, use size-optimized circuit
+    if (share_->Get()->GetProtocol() == MpcProtocol::kBmr ||
+        share_->Get()->GetProtocol() ==
+            MpcProtocol::kGarbledCircuit)  // BMR, use size-optimized circuit
       path = ConstructPath(IntegerOperationType::kMul, bitlength, "_size");
     else  // GMW, use depth-optimized circuit
       path = ConstructPath(IntegerOperationType::kMul, bitlength, "_depth");
@@ -148,7 +157,9 @@ SecureUnsignedInteger SecureUnsignedInteger::operator/(const SecureUnsignedInteg
     std::shared_ptr<AlgorithmDescription> division_algorithm;
     std::string path;
 
-    if (share_->Get()->GetProtocol() == MpcProtocol::kBmr)  // BMR, use size-optimized circuit
+    if (share_->Get()->GetProtocol() == MpcProtocol::kBmr ||
+        share_->Get()->GetProtocol() ==
+            MpcProtocol::kGarbledCircuit)  // BMR, use size-optimized circuit
       path = ConstructPath(IntegerOperationType::kDiv, bitlength, "_size");
     else  // GMW, use depth-optimized circuit
       path = ConstructPath(IntegerOperationType::kDiv, bitlength, "_depth");
@@ -172,7 +183,10 @@ SecureUnsignedInteger SecureUnsignedInteger::operator/(const SecureUnsignedInteg
 }
 
 ShareWrapper SecureUnsignedInteger::operator>(const SecureUnsignedInteger& other) const {
-  if (share_->Get()->GetCircuitType() != CircuitType::kBoolean) {
+  if (share_->Get()->GetCircuitType() == CircuitType::kArithmetic) {
+    if (share_->Get()->GetProtocol() == MpcProtocol::kArithmeticGmw) {
+      return *share_ > *other.share_;
+    }
     // use primitive operation in arithmetic GMW
     throw std::runtime_error("Integer comparison is not implemented for arithmetic GMW");
   } else {  // BooleanCircuitType
@@ -180,7 +194,9 @@ ShareWrapper SecureUnsignedInteger::operator>(const SecureUnsignedInteger& other
     std::shared_ptr<AlgorithmDescription> is_greater_algorithm;
     std::string path;
 
-    if (share_->Get()->GetProtocol() == MpcProtocol::kBmr)  // BMR, use size-optimized circuit
+    if (share_->Get()->GetProtocol() == MpcProtocol::kBmr ||
+        share_->Get()->GetProtocol() ==
+            MpcProtocol::kGarbledCircuit)  // BMR, use size-optimized circuit
       path = ConstructPath(IntegerOperationType::kGt, bitlength, "_size");
     else  // GMW, use depth-optimized circuit
       path = ConstructPath(IntegerOperationType::kGt, bitlength, "_depth");
@@ -250,10 +266,82 @@ std::string SecureUnsignedInteger::ConstructPath(const IntegerOperationType type
       break;
     }
     default:
-      throw std::runtime_error(fmt::format("Invalid integer operation required: {}", type));
+      throw std::runtime_error(
+          fmt::format("Invalid integer operation required: {}", to_string(type)));
   }
   return fmt::format("{}/circuits/int/int_{}{}{}.bristol", kRootDir, operation_type_string,
                      bitlength, suffix);
 }
+
+SecureUnsignedInteger SecureUnsignedInteger::Simdify(std::span<SecureUnsignedInteger> input) {
+  std::vector<SharePointer> input_as_shares;
+  input_as_shares.reserve(input.size());
+  std::transform(input.begin(), input.end(), std::back_inserter(input_as_shares),
+                 [&](SecureUnsignedInteger& i) -> SharePointer { return i.Get().Get(); });
+  return SecureUnsignedInteger(ShareWrapper::Simdify(input_as_shares));
+}
+
+SecureUnsignedInteger SecureUnsignedInteger::Simdify(std::vector<SecureUnsignedInteger>&& input) {
+  return Simdify(input);
+}
+
+SecureUnsignedInteger SecureUnsignedInteger::Subset(std::span<const size_t> positions) {
+  ShareWrapper unwrap{this->Get()};
+  return SecureUnsignedInteger(unwrap.Subset(positions));
+}
+
+SecureUnsignedInteger SecureUnsignedInteger::Subset(std::vector<size_t>&& positions) {
+  return Subset(std::span<const std::size_t>(positions));
+}
+
+std::vector<SecureUnsignedInteger> SecureUnsignedInteger::Unsimdify() const {
+  auto unsimdify_gate = share_->Get()->GetRegister()->EmplaceGate<UnsimdifyGate>(share_->Get());
+  std::vector<SharePointer> shares{unsimdify_gate->GetOutputAsVectorOfShares()};
+  std::vector<SecureUnsignedInteger> result(shares.size());
+  std::transform(shares.begin(), shares.end(), result.begin(),
+                 [](SharePointer share) { return SecureUnsignedInteger(share); });
+  return result;
+}
+
+SecureUnsignedInteger SecureUnsignedInteger::Out(std::size_t output_owner) const {
+  return SecureUnsignedInteger(share_->Out(output_owner));
+}
+
+template <typename Test, template <typename...> class Ref>
+struct is_specialization : std::false_type {};
+
+template <template <typename...> class Ref, typename... Args>
+struct is_specialization<Ref<Args...>, Ref> : std::true_type {};
+
+template <typename T>
+T SecureUnsignedInteger::As() const {
+  if (share_->Get()->GetCircuitType() == CircuitType::kArithmetic)
+    return share_->As<T>();
+  else if (share_->Get()->GetCircuitType() == CircuitType::kBoolean) {
+    auto share_out = share_->As<std::vector<encrypto::motion::BitVector<>>>();
+    if constexpr (std::is_unsigned<T>()) {
+      return encrypto::motion::ToOutput<T>(share_out);
+    } else if constexpr (is_specialization<T, std::vector>::value &&
+                         std::is_unsigned<typename T::value_type>()) {
+      return encrypto::motion::ToVectorOutput<typename T::value_type>(share_out);
+    } else {
+      throw std::invalid_argument(
+          fmt::format("Unsupported output type in SecureUnsignedInteger::As<{}>() for {} Protocol",
+                      typeid(T).name(), to_string(share_->Get()->GetProtocol())));
+    }
+  } else {
+    throw std::invalid_argument("Unsupported protocol for SecureUnsignedInteger::As()");
+  }
+}
+
+template std::uint8_t SecureUnsignedInteger::As() const;
+template std::uint16_t SecureUnsignedInteger::As() const;
+template std::uint32_t SecureUnsignedInteger::As() const;
+template std::uint64_t SecureUnsignedInteger::As() const;
+
+template std::vector<std::uint8_t> SecureUnsignedInteger::As() const;
+template std::vector<std::uint16_t> SecureUnsignedInteger::As() const;
+template std::vector<std::uint32_t> SecureUnsignedInteger::As() const;
+template std::vector<std::uint64_t> SecureUnsignedInteger::As() const;
 
 }  // namespace encrypto::motion

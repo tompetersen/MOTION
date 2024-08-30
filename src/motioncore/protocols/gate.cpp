@@ -27,21 +27,12 @@
 
 #include "base/backend.h"
 #include "base/register.h"
+#include "oblivious_transfer/1_out_of_n/kk13_ot_provider.h"
 #include "oblivious_transfer/ot_provider.h"
 #include "utility/condition.h"
 #include "utility/fiber_condition.h"
 
 namespace encrypto::motion {
-
-void Gate::RegisterWaitingFor(std::size_t wire_id) {
-  std::scoped_lock lock(mutex_);
-  wire_dependencies_.insert(wire_id);
-}
-
-void Gate::SignalDependencyIsReady() {
-  number_of_ready_dependencies_++;
-  IfReadyAddToProcessingQueue();
-}
 
 void Gate::SetSetupIsReady() {
   {
@@ -69,23 +60,14 @@ void Gate::WaitSetup() const { setup_is_ready_condition_.Wait(); }
 
 void Gate::WaitOnline() const { online_is_ready_condition_.Wait(); }
 
-void Gate::IfReadyAddToProcessingQueue() {
-  std::scoped_lock lock(mutex_);
-  if (AreDependenciesReady() && !added_to_active_queue_) {
-    GetRegister().AddToActiveQueue(gate_id_);
-    added_to_active_queue_ = true;
-  }
-}
-
 void Gate::Clear() {
   setup_is_ready_ = false;
   online_is_ready_ = false;
-  added_to_active_queue_ = false;
-  number_of_ready_dependencies_ = 0;
 }
 
 Gate::Gate(Backend& backend)
     : backend_(backend),
+      gate_id_(backend.GetRegister()->NextGateId()),
       setup_is_ready_condition_([this] { return setup_is_ready_.load(); }),
       online_is_ready_condition_([this] { return online_is_ready_.load(); }) {}
 
@@ -101,12 +83,20 @@ Logger& Gate::GetLogger() { return *backend_.GetLogger(); }
 
 BaseProvider& Gate::GetBaseProvider() { return backend_.GetBaseProvider(); }
 
-MtProvider& Gate::GetMtProvider() { return *backend_.GetMtProvider(); }
+MtProvider& Gate::GetMtProvider() { return backend_.GetMtProvider(); }
 
-SpProvider& Gate::GetSpProvider() { return *backend_.GetSpProvider(); }
+SpProvider& Gate::GetSpProvider() { return backend_.GetSpProvider(); }
 
-SbProvider& Gate::GetSbProvider() { return *backend_.GetSbProvider(); }
+SbProvider& Gate::GetSbProvider() { return backend_.GetSbProvider(); }
 
 OtProvider& Gate::GetOtProvider(const std::size_t i) { return backend_.GetOtProvider(i); }
+
+proto::garbled_circuit::Provider& Gate::GetGarbledCircuitProvider() {
+  return backend_.GetGarbledCircuitProvider();
+}
+
+Kk13OtProvider& Gate::GetKk13OtProvider(const std::size_t i) {
+  return backend_.GetKk13OtProvider(i);
+}
 
 }  // namespace encrypto::motion

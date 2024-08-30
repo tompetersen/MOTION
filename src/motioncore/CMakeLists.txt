@@ -1,33 +1,28 @@
 add_library(motion
         algorithm/algorithm_description.cpp
+        algorithm/boolean_algorithms.cpp
         algorithm/low_depth_reduce.h
         base/backend.cpp
         base/configuration.cpp
         base/motion_base_provider.cpp
-        base/output_message_handler.cpp
         base/party.cpp
         base/register.cpp
-        communication/base_ot_message.cpp
-        communication/bmr_message.cpp
         communication/communication_layer.cpp
         communication/dummy_transport.cpp
+        communication/garbled_circuit_message.cpp
         communication/hello_message.cpp
         communication/message.cpp
-        communication/ot_extension_message.cpp
-        communication/output_message.cpp
-        communication/shared_bits_message.cpp
-        communication/sync_handler.cpp
+        communication/message_manager.cpp
         communication/tcp_transport.cpp
         communication/transport.cpp
-        data_storage/base_ot_data.cpp
-        data_storage/ot_extension_data.cpp
-        data_storage/shared_bits_data.cpp
         executor/gate_executor.cpp
         multiplication_triple/mt_provider.cpp
         multiplication_triple/sb_provider.cpp
         multiplication_triple/sp_provider.cpp
         oblivious_transfer/base_ots/base_ot_provider.cpp
         oblivious_transfer/base_ots/ot_hl17.cpp
+        oblivious_transfer/1_out_of_n/kk13_ot_flavors.cpp
+        oblivious_transfer/1_out_of_n/kk13_ot_provider.cpp
         oblivious_transfer/ot_flavors.cpp
         oblivious_transfer/ot_provider.cpp
         primitives/aes/aesni_primitives.cpp
@@ -36,7 +31,13 @@ add_library(motion
         primitives/pseudo_random_generator.cpp
         primitives/sharing_randomness_generator.cpp
         primitives/random/aes128_ctr_rng.cpp
-        protocols/bmr/bmr_data.cpp
+        primitives/random/openssl_rng.cpp
+        protocols/arithmetic_gmw/arithmetic_gmw_gate.cpp
+        protocols/arithmetic_gmw/arithmetic_gmw_share.cpp
+        protocols/arithmetic_gmw/arithmetic_gmw_wire.cpp
+        protocols/astra/astra_gate.cpp
+        protocols/astra/astra_wire.cpp
+        protocols/astra/astra_share.cpp
         protocols/bmr/bmr_gate.cpp
         protocols/bmr/bmr_provider.cpp
         protocols/bmr/bmr_share.cpp
@@ -51,10 +52,15 @@ add_library(motion
         protocols/data_management/simdify_gate.cpp
         protocols/data_management/subset_gate.cpp
         protocols/data_management/unsimdify_gate.cpp
+        protocols/garbled_circuit/garbled_circuit_gate.cpp
+        protocols/garbled_circuit/garbled_circuit_provider.cpp
+        protocols/garbled_circuit/garbled_circuit_share.cpp
+        protocols/garbled_circuit/garbled_circuit_wire.cpp
         protocols/gate.cpp
         protocols/share.cpp
         protocols/share_wrapper.cpp
         protocols/wire.cpp
+        secure_type/secure_signed_integer.cpp
         secure_type/secure_unsigned_integer.cpp
         statistics/analysis.cpp
         statistics/run_time_statistics.cpp
@@ -62,6 +68,7 @@ add_library(motion
         utility/bit_vector.cpp
         utility/block.cpp
         utility/condition.cpp
+        utility/fiber_waitable.cpp
         utility/fiber_thread_pool/fiber_thread_pool.cpp
         utility/fiber_thread_pool/pooled_work_stealing.cpp
         utility/helpers.cpp
@@ -76,12 +83,12 @@ add_library(MOTION::motion ALIAS motion)
 file(TOUCH "${CMAKE_CURRENT_BINARY_DIR}/version.cpp")
 target_sources(motion PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/version.cpp")
 add_custom_target(motion_version
-                   COMMAND "${CMAKE_COMMAND}"
-                      "-DVERSION_CPP_IN:FILEPATH=${CMAKE_CURRENT_SOURCE_DIR}/utility/version.cpp.in"
-                      "-P" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cmake"
-                   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/utility/version.cpp.in"
-                   BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/version.cpp.new"
-                   COMMENT "gather information about git repository and generating version.cpp")
+        COMMAND "${CMAKE_COMMAND}"
+        "-DVERSION_CPP_IN:FILEPATH=${CMAKE_CURRENT_SOURCE_DIR}/utility/version.cpp.in"
+        "-P" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cmake"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/utility/version.cpp.in"
+        BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/version.cpp.new"
+        COMMENT "gather information about git repository and generating version.cpp")
 add_dependencies(motion motion_version)
 
 
@@ -126,16 +133,22 @@ endif ()
 #            )
 #endif ()
 
-
 target_compile_features(motion PUBLIC cxx_std_20)
 target_compile_options(motion PRIVATE
         ${MOTION_EXTRA_FLAGS}
         -Wall -Wextra
-        -pedantic -ansi
+        -pedantic
         -maes -msse2 -msse4.1 -msse4.2 -mpclmul
         -ffunction-sections -march=native -ffast-math
         ${MOTION_VECT_COST_MODEL_GCC_FLAG}
         )
+
+if (WIN32)
+    target_link_libraries(motion PUBLIC wsock32 ws2_32)
+    target_include_directories(motion PUBLIC
+            $<INSTALL_INTERFACE:include>
+            $<BUILD_INTERFACE:${OPENSSL_INCLUDE_DIR}>)
+endif ()
 
 # Prevent undefined references to `__log2_finite' and `__exp2_finite' when
 # compiling with clang.
@@ -210,7 +223,17 @@ target_link_libraries(motion
         Threads::Threads
         OpenSSL::Crypto
         OpenSSL::SSL
+        PUBLIC
+        Boost::json
         )
+
+if (MOTION_LINK_TCMALLOC)
+	find_library(tcmalloc_minimal REQUIRED
+		NAMES tcmalloc_minimal libtcmalloc_minimal
+		PATHS ${TCMALLOC_ROOT}/lib
+		)
+	target_link_libraries(motion PRIVATE tcmalloc_minimal)
+endif ()
 
 install(TARGETS motion
         EXPORT "${PROJECT_NAME}Targets"

@@ -24,6 +24,8 @@
 
 #include "share_wrapper.h"
 
+#include <cassert>
+#include <stdexcept>
 #include <typeinfo>
 
 #include "algorithm/algorithm_description.h"
@@ -32,6 +34,9 @@
 #include "protocols/arithmetic_gmw/arithmetic_gmw_gate.h"
 #include "protocols/arithmetic_gmw/arithmetic_gmw_share.h"
 #include "protocols/arithmetic_gmw/arithmetic_gmw_wire.h"
+#include "protocols/astra/astra_gate.h"
+#include "protocols/astra/astra_share.h"
+#include "protocols/astra/astra_wire.h"
 #include "protocols/bmr/bmr_gate.h"
 #include "protocols/bmr/bmr_share.h"
 #include "protocols/bmr/bmr_wire.h"
@@ -46,7 +51,10 @@
 #include "protocols/data_management/simdify_gate.h"
 #include "protocols/data_management/subset_gate.h"
 #include "protocols/data_management/unsimdify_gate.h"
+#include "protocols/garbled_circuit/garbled_circuit_provider.h"
 #include "secure_type/secure_unsigned_integer.h"
+#include "share.h"
+#include "utility/bit_vector.h"
 
 namespace encrypto::motion {
 
@@ -54,23 +62,34 @@ using SharePointer = std::shared_ptr<Share>;
 
 ShareWrapper ShareWrapper::operator~() const {
   assert(share_);
-  if (share_->GetProtocol() == MpcProtocol::kArithmeticGmw) {
+  if (share_->GetCircuitType() == CircuitType::kArithmetic) {
     throw std::runtime_error(
-        "Boolean primitive operations are not supported for Arithmetic GMW shares");
+        "Boolean primitive operations are not supported for arithmetic circuits");
   }
 
-  if (share_->GetProtocol() == MpcProtocol::kBooleanGmw) {
-    auto gmw_share = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(share_);
-    assert(gmw_share);
-    auto inv_gate = std::make_shared<proto::boolean_gmw::InvGate>(gmw_share);
-    share_->GetRegister()->RegisterNextGate(inv_gate);
-    return ShareWrapper(inv_gate->GetOutputAsShare());
-  } else {
-    auto bmr_share = std::dynamic_pointer_cast<proto::bmr::Share>(share_);
-    assert(bmr_share);
-    auto inv_gate = std::make_shared<proto::bmr::InvGate>(bmr_share);
-    share_->GetRegister()->RegisterNextGate(inv_gate);
-    return ShareWrapper(inv_gate->GetOutputAsShare());
+  switch (share_->GetProtocol()) {
+    case MpcProtocol::kBmr: {
+      auto bmr_share = std::dynamic_pointer_cast<proto::bmr::Share>(share_);
+      assert(bmr_share);
+      auto inv_gate =
+          share_->GetBackend().GetRegister()->EmplaceGate<proto::bmr::InvGate>(bmr_share);
+      return ShareWrapper(inv_gate->GetOutputAsShare());
+    }
+    case MpcProtocol::kBooleanGmw: {
+      auto gmw_share = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(share_);
+      assert(gmw_share);
+      auto inv_gate =
+          share_->GetBackend().GetRegister()->EmplaceGate<proto::boolean_gmw::InvGate>(gmw_share);
+      return ShareWrapper(inv_gate->GetOutputAsShare());
+    }
+    case MpcProtocol::kGarbledCircuit: {
+      auto inv_gate = share_->GetBackend().GetGarbledCircuitProvider().MakeInvGate(share_);
+      return ShareWrapper(inv_gate->GetOutputAsShare());
+    }
+    default:
+      throw std::runtime_error(
+          fmt::format("Unknown protocol for constructing an INV gate with id {}",
+                      static_cast<std::size_t>(share_->GetProtocol())));
   }
 }
 
@@ -80,28 +99,39 @@ ShareWrapper ShareWrapper::operator^(const ShareWrapper& other) const {
   assert(share_->GetProtocol() == other->GetProtocol());
   assert(share_->GetBitLength() == other->GetBitLength());
 
-  if (share_->GetProtocol() == MpcProtocol::kArithmeticGmw) {
+  if (share_->GetCircuitType() == CircuitType::kArithmetic) {
     throw std::runtime_error(
-        "Boolean primitive operations are not supported for Arithmetic GMW shares");
+        "Boolean primitive operations are not supported for arithmetic circuits");
   }
 
-  if (share_->GetProtocol() == MpcProtocol::kBooleanGmw) {
-    auto this_b = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(share_);
-    auto other_b = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(*other);
+  switch (share_->GetProtocol()) {
+    case MpcProtocol::kBmr: {
+      auto this_b = std::dynamic_pointer_cast<proto::bmr::Share>(share_);
+      auto other_b = std::dynamic_pointer_cast<proto::bmr::Share>(*other);
 
-    assert(this_b);
-    assert(other_b);
+      auto xor_gate =
+          share_->GetBackend().GetRegister()->EmplaceGate<proto::bmr::XorGate>(this_b, other_b);
+      return ShareWrapper(xor_gate->GetOutputAsShare());
+    }
+    case MpcProtocol::kBooleanGmw: {
+      auto this_b = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(share_);
+      auto other_b = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(*other);
 
-    auto xor_gate = std::make_shared<proto::boolean_gmw::XorGate>(this_b, other_b);
-    share_->GetRegister()->RegisterNextGate(xor_gate);
-    return ShareWrapper(xor_gate->GetOutputAsShare());
-  } else {
-    auto this_b = std::dynamic_pointer_cast<proto::bmr::Share>(share_);
-    auto other_b = std::dynamic_pointer_cast<proto::bmr::Share>(*other);
+      assert(this_b);
+      assert(other_b);
 
-    auto xor_gate = std::make_shared<proto::bmr::XorGate>(this_b, other_b);
-    share_->GetRegister()->RegisterNextGate(xor_gate);
-    return ShareWrapper(xor_gate->GetOutputAsShare());
+      auto xor_gate = share_->GetBackend().GetRegister()->EmplaceGate<proto::boolean_gmw::XorGate>(
+          this_b, other_b);
+      return ShareWrapper(xor_gate->GetOutputAsShare());
+    }
+    case MpcProtocol::kGarbledCircuit: {
+      auto xor_gate = share_->GetBackend().GetGarbledCircuitProvider().MakeXorGate(share_, *other);
+      return ShareWrapper(xor_gate->GetOutputAsShare());
+    }
+    default:
+      throw std::runtime_error(
+          fmt::format("Unknown protocol for constructing an XOR gate with id {}",
+                      static_cast<std::size_t>(share_->GetProtocol())));
   }
 }
 
@@ -111,25 +141,36 @@ ShareWrapper ShareWrapper::operator&(const ShareWrapper& other) const {
   assert(share_->GetProtocol() == other->GetProtocol());
   assert(share_->GetBitLength() == other->GetBitLength());
 
-  if (share_->GetProtocol() == MpcProtocol::kArithmeticGmw) {
+  if (share_->GetCircuitType() == CircuitType::kArithmetic) {
     throw std::runtime_error(
-        "Boolean primitive operations are not supported for Arithmetic GMW shares");
+        "Boolean primitive operations are not supported for arithmetic circuits");
   }
 
-  if (share_->GetProtocol() == MpcProtocol::kBooleanGmw) {
-    auto this_b = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(share_);
-    auto other_b = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(*other);
+  switch (share_->GetProtocol()) {
+    case MpcProtocol::kBmr: {
+      auto this_b = std::dynamic_pointer_cast<proto::bmr::Share>(share_);
+      auto other_b = std::dynamic_pointer_cast<proto::bmr::Share>(*other);
 
-    auto and_gate = std::make_shared<proto::boolean_gmw::AndGate>(this_b, other_b);
-    share_->GetRegister()->RegisterNextGate(and_gate);
-    return ShareWrapper(and_gate->GetOutputAsShare());
-  } else {
-    auto this_b = std::dynamic_pointer_cast<proto::bmr::Share>(share_);
-    auto other_b = std::dynamic_pointer_cast<proto::bmr::Share>(*other);
+      auto and_gate =
+          share_->GetBackend().GetRegister()->EmplaceGate<proto::bmr::AndGate>(this_b, other_b);
+      return ShareWrapper(and_gate->GetOutputAsShare());
+    }
+    case MpcProtocol::kBooleanGmw: {
+      auto this_b = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(share_);
+      auto other_b = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(*other);
 
-    auto and_gate = std::make_shared<proto::bmr::AndGate>(this_b, other_b);
-    share_->GetRegister()->RegisterNextGate(and_gate);
-    return ShareWrapper(and_gate->GetOutputAsShare());
+      auto and_gate = share_->GetBackend().GetRegister()->EmplaceGate<proto::boolean_gmw::AndGate>(
+          this_b, other_b);
+      return ShareWrapper(and_gate->GetOutputAsShare());
+    }
+    case MpcProtocol::kGarbledCircuit: {
+      auto and_gate = share_->GetBackend().GetGarbledCircuitProvider().MakeAndGate(share_, *other);
+      return ShareWrapper(and_gate->GetOutputAsShare());
+    }
+    default:
+      throw std::runtime_error(
+          fmt::format("Unknown protocol for constructing an AND gate with id {}",
+                      static_cast<std::size_t>(share_->GetProtocol())));
   }
 }
 
@@ -139,9 +180,9 @@ ShareWrapper ShareWrapper::operator|(const ShareWrapper& other) const {
   assert(share_->GetProtocol() == other->GetProtocol());
   assert(share_->GetBitLength() == other->GetBitLength());
 
-  if (share_->GetProtocol() == MpcProtocol::kArithmeticGmw) {
+  if (share_->GetCircuitType() == CircuitType::kArithmetic) {
     throw std::runtime_error(
-        "Boolean primitive operations are not supported for Arithmetic GMW shares");
+        "Boolean primitive operations are not supported for arithmetic circuits");
   }
 
   // OR operatinos is equal to NOT ( ( NOT a ) AND ( NOT b ) )
@@ -154,9 +195,10 @@ ShareWrapper ShareWrapper::operator+(const ShareWrapper& other) const {
   assert(share_->GetCircuitType() == other->GetCircuitType());
   assert(share_->GetBitLength() == other->GetBitLength());
   if (share_->GetProtocol() != MpcProtocol::kArithmeticGmw &&
-      other->GetProtocol() != MpcProtocol::kArithmeticGmw) {
+      other->GetProtocol() != MpcProtocol::kArithmeticGmw &&
+      share_->GetProtocol() != MpcProtocol::kAstra && other->GetProtocol() != MpcProtocol::kAstra) {
     throw std::runtime_error(
-        "Arithmetic primitive operations are only supported for arithmetic GMW shares");
+        "Arithmetic primitive operations are only supported for arithmetic GMW and Astra shares");
   }
 
   if (share_->GetBitLength() == 8u) {
@@ -178,9 +220,10 @@ ShareWrapper ShareWrapper::operator-(const ShareWrapper& other) const {
   assert(share_->GetCircuitType() == other->GetCircuitType());
   assert(share_->GetBitLength() == other->GetBitLength());
   if (share_->GetProtocol() != MpcProtocol::kArithmeticGmw &&
-      other->GetProtocol() != MpcProtocol::kArithmeticGmw) {
+      other->GetProtocol() != MpcProtocol::kArithmeticGmw &&
+      share_->GetProtocol() != MpcProtocol::kAstra && other->GetProtocol() != MpcProtocol::kAstra) {
     throw std::runtime_error(
-        "Arithmetic primitive operations are only supported for arithmetic GMW shares");
+        "Arithmetic primitive operations are only supported for arithmetic GMW and Astra shares");
   }
 
   if (share_->GetBitLength() == 8u) {
@@ -199,13 +242,43 @@ ShareWrapper ShareWrapper::operator-(const ShareWrapper& other) const {
 ShareWrapper ShareWrapper::operator*(const ShareWrapper& other) const {
   assert(*other);
   assert(share_);
+  assert(share_->GetNumberOfSimdValues() == other->GetNumberOfSimdValues());
+
+  bool lhs_is_arith = share_->GetCircuitType() == CircuitType::kArithmetic;
+  bool rhs_is_arith = other->GetCircuitType() == CircuitType::kArithmetic;
+  bool lhs_is_bool = share_->GetCircuitType() == CircuitType::kBoolean;
+  bool rhs_is_bool = other->GetCircuitType() == CircuitType::kBoolean;
+
+  if (!lhs_is_arith || !rhs_is_arith) {
+    if (lhs_is_bool && rhs_is_arith) {
+      if (other->GetBitLength() == 8u) {
+        return HybridMul<std::uint8_t>(share_, *other);
+      } else if (other->GetBitLength() == 16u) {
+        return HybridMul<std::uint16_t>(share_, *other);
+      } else if (other->GetBitLength() == 32u) {
+        return HybridMul<std::uint32_t>(share_, *other);
+      } else if (other->GetBitLength() == 64u) {
+        return HybridMul<std::uint64_t>(share_, *other);
+      } else {
+        throw std::bad_cast();
+      }
+    } else if (lhs_is_arith && rhs_is_bool) {
+      return other * *this;
+    } else {
+      throw std::runtime_error(
+          "Arithmetic primitive operations are only supported for arithmetic shares");
+    }
+  }
+
   assert(share_->GetCircuitType() == other->GetCircuitType());
   assert(share_->GetBitLength() == other->GetBitLength());
+
   assert(share_->GetNumberOfSimdValues() == other->GetNumberOfSimdValues());
   if (share_->GetProtocol() != MpcProtocol::kArithmeticGmw &&
-      other->GetProtocol() != MpcProtocol::kArithmeticGmw) {
+      other->GetProtocol() != MpcProtocol::kArithmeticGmw &&
+      share_->GetProtocol() != MpcProtocol::kAstra && other->GetProtocol() != MpcProtocol::kAstra) {
     throw std::runtime_error(
-        "Arithmetic primitive operations are only supported for arithmetic GMW shares");
+        "Arithmetic primitive operations are only supported for arithmetic GMW and Astra shares");
   }
 
   if (share_ == other.share_) {  // squaring
@@ -279,6 +352,36 @@ ShareWrapper ShareWrapper::operator==(const ShareWrapper& other) const {
   }
 }
 
+ShareWrapper ShareWrapper::operator>(const ShareWrapper& other) const {
+  if (other->GetBitLength() != share_->GetBitLength()) {
+    share_->GetBackend().GetLogger()->LogError(
+        fmt::format("Comparing shares of different bit lengths: this {} bits vs other "
+                    "share's {} bits",
+                    share_->GetBitLength(), other->GetBitLength()));
+  } else if (other->GetBitLength() == 0) {
+    share_->GetBackend().GetLogger()->LogError("Comparing shares of bit length 0 is not allowed");
+  }
+
+  assert(*other);
+  assert(share_);
+  if (share_->GetProtocol() != MpcProtocol::kArithmeticGmw ||
+      other->GetProtocol() != MpcProtocol::kArithmeticGmw) {
+    throw std::runtime_error("GreaterThan operation is only supported for arithmetic GMW shares");
+  }
+
+  if (share_->GetBitLength() == 8u) {
+    return GreaterThan<std::uint8_t>(share_, *other);
+  } else if (share_->GetBitLength() == 16u) {
+    return GreaterThan<std::uint16_t>(share_, *other);
+  } else if (share_->GetBitLength() == 32u) {
+    return GreaterThan<std::uint32_t>(share_, *other);
+  } else if (share_->GetBitLength() == 64u) {
+    return GreaterThan<std::uint64_t>(share_, *other);
+  } else {
+    throw std::bad_cast();
+  }
+}
+
 ShareWrapper ShareWrapper::Mux(const ShareWrapper& a, const ShareWrapper& b) const {
   assert(*a);
   assert(*b);
@@ -302,8 +405,8 @@ ShareWrapper ShareWrapper::Mux(const ShareWrapper& a, const ShareWrapper& b) con
     assert(a_gmw);
     assert(b_gmw);
 
-    auto mux_gate = std::make_shared<proto::boolean_gmw::MuxGate>(a_gmw, b_gmw, this_gmw);
-    share_->GetRegister()->RegisterNextGate(mux_gate);
+    auto mux_gate =
+        share_->GetRegister()->EmplaceGate<proto::boolean_gmw::MuxGate>(a_gmw, b_gmw, this_gmw);
     return ShareWrapper(mux_gate->GetOutputAsShare());
   } else {
     // s ? a : b
@@ -315,6 +418,38 @@ ShareWrapper ShareWrapper::Mux(const ShareWrapper& a, const ShareWrapper& b) con
         ShareWrapper::Concatenate(std::vector<ShareWrapper>(a_xor_b->GetBitLength(), *this));
     mask &= a_xor_b;
     return b ^ mask;
+  }
+}
+
+ShareWrapper DotProduct(std::span<ShareWrapper> a, std::span<ShareWrapper> b) {
+  assert(a.size() == b.size());
+  assert(a.size() > 0);
+  assert(*a[0]);
+  assert(*b[0]);
+  assert(a[0]->GetCircuitType() == b[0]->GetCircuitType());
+  assert(a[0]->GetBitLength() == b[0]->GetBitLength());
+  for (auto i = 1u; i != a.size(); ++i) {
+    assert(*a[i]);
+    assert(*b[i]);
+    assert(a[i]->GetCircuitType() == b[i]->GetCircuitType());
+    assert(a[i]->GetBitLength() == b[i]->GetBitLength());
+    assert(a[i - 1]->GetCircuitType() == a[i]->GetCircuitType());
+    assert(b[i - 1]->GetCircuitType() == b[i]->GetCircuitType());
+    assert(a[i - 1]->GetBitLength() == a[i]->GetBitLength());
+    assert(b[i - 1]->GetBitLength() == b[i]->GetBitLength());
+  }
+
+  auto bit_length = a[0]->GetBitLength();
+  if (bit_length == 8u) {
+    return a[0].DotProduct<std::uint8_t>(a, b);
+  } else if (bit_length == 16u) {
+    return a[0].DotProduct<std::uint16_t>(a, b);
+  } else if (bit_length == 32u) {
+    return a[0].DotProduct<std::uint32_t>(a, b);
+  } else if (bit_length == 64u) {
+    return a[0].DotProduct<std::uint64_t>(a, b);
+  } else {
+    throw std::bad_cast();
   }
 }
 
@@ -348,7 +483,7 @@ ShareWrapper ShareWrapper::Convert() const {
       return BooleanGmwToBmr();
     }
   } else {
-    throw std::runtime_error("Unkown MpcProtocol");
+    throw std::runtime_error("Unknown MpcProtocol");
   }
 }
 
@@ -358,8 +493,8 @@ template ShareWrapper ShareWrapper::Convert<MpcProtocol::kBooleanGmw>() const;
 template ShareWrapper ShareWrapper::Convert<MpcProtocol::kBmr>() const;
 
 ShareWrapper ShareWrapper::ArithmeticGmwToBmr() const {
-  auto arithmetic_gmw_to_bmr_gate{std::make_shared<ArithmeticGmwToBmrGate>(share_)};
-  share_->GetRegister()->RegisterNextGate(arithmetic_gmw_to_bmr_gate);
+  auto arithmetic_gmw_to_bmr_gate{
+      share_->GetRegister()->EmplaceGate<ArithmeticGmwToBmrGate>(share_)};
   return ShareWrapper(arithmetic_gmw_to_bmr_gate->GetOutputAsShare());
 }
 
@@ -367,27 +502,23 @@ ShareWrapper ShareWrapper::BooleanGmwToArithmeticGmw() const {
   const auto bitlength = share_->GetBitLength();
   switch (bitlength) {
     case 8u: {
-      auto boolean_gmw_to_arithmetic_gmw_gate =
-          std::make_shared<GmwToArithmeticGate<std::uint8_t>>(share_);
-      share_->GetRegister()->RegisterNextGate(boolean_gmw_to_arithmetic_gmw_gate);
+      auto boolean_gmw_to_arithmetic_gmw_gate{
+          share_->GetRegister()->EmplaceGate<GmwToArithmeticGate<std::uint8_t>>(share_)};
       return ShareWrapper(boolean_gmw_to_arithmetic_gmw_gate->GetOutputAsShare());
     }
     case 16u: {
       auto boolean_gmw_to_arithmetic_gmw_gate{
-          std::make_shared<GmwToArithmeticGate<std::uint16_t>>(share_)};
-      share_->GetRegister()->RegisterNextGate(boolean_gmw_to_arithmetic_gmw_gate);
+          share_->GetRegister()->EmplaceGate<GmwToArithmeticGate<std::uint16_t>>(share_)};
       return ShareWrapper(boolean_gmw_to_arithmetic_gmw_gate->GetOutputAsShare());
     }
     case 32u: {
       auto boolean_gmw_to_arithmetic_gmw_gate{
-          std::make_shared<GmwToArithmeticGate<std::uint32_t>>(share_)};
-      share_->GetRegister()->RegisterNextGate(boolean_gmw_to_arithmetic_gmw_gate);
+          share_->GetRegister()->EmplaceGate<GmwToArithmeticGate<std::uint32_t>>(share_)};
       return ShareWrapper(boolean_gmw_to_arithmetic_gmw_gate->GetOutputAsShare());
     }
     case 64u: {
       auto boolean_gmw_to_arithmetic_gmw_gate{
-          std::make_shared<GmwToArithmeticGate<std::uint64_t>>(share_)};
-      share_->GetRegister()->RegisterNextGate(boolean_gmw_to_arithmetic_gmw_gate);
+          share_->GetRegister()->EmplaceGate<GmwToArithmeticGate<std::uint64_t>>(share_)};
       return ShareWrapper(boolean_gmw_to_arithmetic_gmw_gate->GetOutputAsShare());
     }
     default:
@@ -398,16 +529,15 @@ ShareWrapper ShareWrapper::BooleanGmwToArithmeticGmw() const {
 ShareWrapper ShareWrapper::BooleanGmwToBmr() const {
   auto boolean_gmw_share = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(share_);
   assert(boolean_gmw_share);
-  auto boolean_gmw_to_bmr_gate{std::make_shared<BooleanGmwToBmrGate>(boolean_gmw_share)};
-  share_->GetRegister()->RegisterNextGate(boolean_gmw_to_bmr_gate);
+  auto boolean_gmw_to_bmr_gate{
+      share_->GetRegister()->EmplaceGate<BooleanGmwToBmrGate>(boolean_gmw_share)};
   return ShareWrapper(boolean_gmw_to_bmr_gate->GetOutputAsShare());
 }
 
 ShareWrapper ShareWrapper::BmrToBooleanGmw() const {
   auto bmr_share = std::dynamic_pointer_cast<proto::bmr::Share>(share_);
   assert(bmr_share);
-  auto bmr_to_boolean_gmw_gate = std::make_shared<BmrToBooleanGmwGate>(bmr_share);
-  share_->GetRegister()->RegisterNextGate(bmr_to_boolean_gmw_gate);
+  auto bmr_to_boolean_gmw_gate{share_->GetRegister()->EmplaceGate<BmrToBooleanGmwGate>(bmr_share)};
   return ShareWrapper(bmr_to_boolean_gmw_gate->GetOutputAsShare());
 }
 
@@ -440,6 +570,30 @@ ShareWrapper ShareWrapper::Out(std::size_t output_owner) const {
         }
       }
     } break;
+    case MpcProtocol::kAstra: {
+      switch (share_->GetBitLength()) {
+        case 8u: {
+          result = backend.AstraOutput<std::uint8_t>(share_, output_owner);
+          break;
+        }
+        case 16u: {
+          result = backend.AstraOutput<std::uint16_t>(share_, output_owner);
+          break;
+        }
+        case 32u: {
+          result = backend.AstraOutput<std::uint32_t>(share_, output_owner);
+          break;
+        }
+        case 64u: {
+          result = backend.AstraOutput<std::uint64_t>(share_, output_owner);
+          break;
+        }
+        default: {
+          throw std::runtime_error(
+              fmt::format("Unknown arithmetic ring of {} bilength", share_->GetBitLength()));
+        }
+      }
+    } break;
     case MpcProtocol::kBooleanGmw: {
       result = backend.BooleanGmwOutput(share_, output_owner);
       break;
@@ -448,9 +602,13 @@ ShareWrapper ShareWrapper::Out(std::size_t output_owner) const {
       result = backend.BmrOutput(share_, output_owner);
       break;
     }
+    case MpcProtocol::kGarbledCircuit: {
+      result = backend.GarbledCircuitOutput(share_, output_owner);
+      break;
+    }
     default: {
-      throw std::runtime_error(
-          fmt::format("Unknown MPC protocol with id {}", static_cast<uint>(share_->GetProtocol())));
+      throw std::runtime_error(fmt::format("Unknown MPC protocol with id {}",
+                                           static_cast<unsigned int>(share_->GetProtocol())));
     }
   }
   return ShareWrapper(result);
@@ -458,6 +616,8 @@ ShareWrapper ShareWrapper::Out(std::size_t output_owner) const {
 
 std::vector<ShareWrapper> ShareWrapper::Split() const {
   std::vector<ShareWrapper> result;
+  if (!share_) return result;
+
   result.reserve(share_->GetWires().size());
   const auto split = share_->Split();
   for (const auto& s : split) result.emplace_back(s);
@@ -508,11 +668,34 @@ ShareWrapper ShareWrapper::Concatenate(std::span<const ShareWrapper> input) {
               wires.at(0)->GetBitLength()));
       }
     }
+    case MpcProtocol::kAstra: {
+      switch (wires.at(0)->GetBitLength()) {
+        case 8: {
+          return ShareWrapper(std::make_shared<proto::astra::Share<std::uint8_t>>(wires.at(0)));
+        }
+        case 16: {
+          return ShareWrapper(std::make_shared<proto::astra::Share<std::uint16_t>>(wires.at(0)));
+        }
+        case 32: {
+          return ShareWrapper(std::make_shared<proto::astra::Share<std::uint32_t>>(wires.at(0)));
+        }
+        case 64: {
+          return ShareWrapper(std::make_shared<proto::astra::Share<std::uint64_t>>(wires.at(0)));
+        }
+        default:
+          throw std::runtime_error(fmt::format(
+              "Incorrect bit length of arithmetic shares: {}, allowed are 8, 16, 32, 64",
+              wires.at(0)->GetBitLength()));
+      }
+    }
     case MpcProtocol::kBooleanGmw: {
       return ShareWrapper(std::make_shared<proto::boolean_gmw::Share>(wires));
     }
     case MpcProtocol::kBmr: {
       return ShareWrapper(std::make_shared<proto::bmr::Share>(wires));
+    }
+    case MpcProtocol::kGarbledCircuit: {
+      return ShareWrapper(std::make_shared<proto::garbled_circuit::Share>(wires));
     }
     default: {
       throw std::runtime_error("Unknown MPC protocol");
@@ -630,9 +813,18 @@ T ShareWrapper::As() const {
           std::dynamic_pointer_cast<proto::ConstantArithmeticWire<T>>(share_->GetWires()[0]);
       assert(constant_arithmetic_wire);
       return constant_arithmetic_wire->GetValues()[0];
+    } else if (share_->GetProtocol() == MpcProtocol::kAstra) {
+      auto astra_wire = std::dynamic_pointer_cast<proto::astra::Wire<T>>(share_->GetWires()[0]);
+      assert(astra_wire);
+      return astra_wire->GetValues()[0].value;
     } else {
       throw std::invalid_argument("Unsupported arithmetic protocol in ShareWrapper::As()");
     }
+  } else if constexpr (std::is_signed<T>()) {
+    std::make_unsigned_t<T> unsigned_value{As<std::make_unsigned_t<T>>()};
+    bool msb{(unsigned_value >> sizeof(T) * 8 - 1) == 1};
+    T signed_value{msb ? -static_cast<T>(-unsigned_value) : static_cast<T>(unsigned_value)};
+    return signed_value;
   } else if constexpr (is_specialization<T, std::vector>::value &&
                        std::is_unsigned<typename T::value_type>()) {
     // std::vector of unsigned integers
@@ -652,9 +844,30 @@ T ShareWrapper::As() const {
               share_->GetWires()[0]);
       assert(constant_arithmetic_wire);
       return constant_arithmetic_wire->GetValues();
+    } else if (share_->GetProtocol() == MpcProtocol::kAstra) {
+      auto astra_wire = std::dynamic_pointer_cast<proto::astra::Wire<typename T::value_type>>(
+          share_->GetWires()[0]);
+      assert(astra_wire);
+      auto const& values = astra_wire->GetValues();
+      T result(values.size());
+      for (auto i = 0u; i != result.size(); ++i) {
+        result[i] = values[i].value;
+      }
+      return result;
     } else {
       throw std::invalid_argument("Unsupported arithmetic protocol in ShareWrapper::As()");
     }
+  } else if constexpr (is_specialization<T, std::vector>::value &&
+                       std::is_signed<typename T::value_type>()) {
+    auto unsigned_values{As<std::vector<std::make_unsigned_t<typename T::value_type>>>()};
+    T signed_values;
+    signed_values.reserve(unsigned_values.size());
+    for (auto& v : unsigned_values) {
+      bool msb{(v >> sizeof(T) * 8 - 1) == 1};
+      T signed_value{msb ? -static_cast<T>(-v) : static_cast<T>(v)};
+      signed_values.emplace_back(signed_value);
+    }
+    return unsigned_values;
   } else {
     throw std::invalid_argument(
         fmt::format("Unsupported output type in ShareWrapper::As<{}>()", typeid(T).name()));
@@ -682,6 +895,10 @@ bool ShareWrapper::As<bool>() const {
         std::dynamic_pointer_cast<proto::ConstantBooleanWire>(share_->GetWires()[0]);
     assert(constant_boolean_wire);
     return constant_boolean_wire->GetValues()[0];
+  } else if (share_->GetProtocol() == MpcProtocol::kGarbledCircuit) {
+    auto gc_wire = std::dynamic_pointer_cast<proto::garbled_circuit::Wire>(share_->GetWires()[0]);
+    assert(gc_wire);
+    return gc_wire->CopyPermutationBits()[0];
   } else {
     throw std::invalid_argument("Unsupported Boolean protocol in ShareWrapper::As()");
   }
@@ -708,6 +925,10 @@ BitVector<> ShareWrapper::As() const {
         std::dynamic_pointer_cast<proto::ConstantBooleanWire>(share_->GetWires()[0]);
     assert(constant_boolean_wire);
     return constant_boolean_wire->GetValues();
+  } else if (share_->GetProtocol() == MpcProtocol::kGarbledCircuit) {
+    auto gc_wire = std::dynamic_pointer_cast<proto::garbled_circuit::Wire>(share_->GetWires()[0]);
+    assert(gc_wire);
+    return gc_wire->CopyPermutationBits();
   } else {
     throw std::invalid_argument("Unsupported Boolean protocol in ShareWrapper::As()");
   }
@@ -735,43 +956,66 @@ template std::vector<std::uint64_t> ShareWrapper::As() const;
 
 template <typename T>
 ShareWrapper ShareWrapper::Add(SharePointer share, SharePointer other) const {
-  if (!share->IsConstant() && !other->IsConstant()) {
-    auto this_a = std::dynamic_pointer_cast<proto::arithmetic_gmw::Share<T>>(share);
-    assert(this_a);
-    auto this_wire_a = this_a->GetArithmeticWire();
+  assert(share->GetProtocol() == other->GetProtocol() ||
+         (share->GetCircuitType() == other->GetCircuitType() &&
+          share->IsConstant() != other->IsConstant()));
+  switch (share->GetProtocol()) {
+    case MpcProtocol::kArithmeticGmw: {
+      if (!share->IsConstant() && !other->IsConstant()) {
+        auto this_a = std::dynamic_pointer_cast<proto::arithmetic_gmw::Share<T>>(share);
+        assert(this_a);
+        auto this_wire_a = this_a->GetArithmeticWire();
 
-    auto other_a = std::dynamic_pointer_cast<proto::arithmetic_gmw::Share<T>>(other);
-    assert(other_a);
-    auto other_wire_a = other_a->GetArithmeticWire();
+        auto other_a = std::dynamic_pointer_cast<proto::arithmetic_gmw::Share<T>>(other);
+        assert(other_a);
+        auto other_wire_a = other_a->GetArithmeticWire();
 
-    auto addition_gate =
-        std::make_shared<proto::arithmetic_gmw::AdditionGate<T>>(this_wire_a, other_wire_a);
-    auto addition_gate_cast = std::static_pointer_cast<Gate>(addition_gate);
-    share_->GetRegister()->RegisterNextGate(addition_gate_cast);
-    auto result = std::static_pointer_cast<Share>(addition_gate->GetOutputAsArithmeticShare());
+        auto addition_gate =
+            share_->GetRegister()->EmplaceGate<proto::arithmetic_gmw::AdditionGate<T>>(
+                this_wire_a, other_wire_a);
+        auto result = std::static_pointer_cast<Share>(addition_gate->GetOutputAsArithmeticShare());
 
-    return ShareWrapper(result);
-  } else {
-    assert(!(share->IsConstant() && other->IsConstant()));
-    auto constant_wire_original = share;
-    auto non_constant_wire_original = other;
-    if (non_constant_wire_original->IsConstant())
-      std::swap(constant_wire_original, non_constant_wire_original);
-    assert(constant_wire_original->IsConstant() && !non_constant_wire_original->IsConstant());
+        return ShareWrapper(result);
+      } else {
+        assert(!(share->IsConstant() && other->IsConstant()));
+        auto constant_wire_original = share;
+        auto non_constant_wire_original = other;
+        if (non_constant_wire_original->IsConstant())
+          std::swap(constant_wire_original, non_constant_wire_original);
+        assert(constant_wire_original->IsConstant() && !non_constant_wire_original->IsConstant());
 
-    auto constant_wire = std::dynamic_pointer_cast<proto::ConstantArithmeticWire<T>>(
-        constant_wire_original->GetWires()[0]);
-    assert(constant_wire);
-    auto non_constant_wire = std::dynamic_pointer_cast<proto::arithmetic_gmw::Wire<T>>(
-        non_constant_wire_original->GetWires()[0]);
-    assert(non_constant_wire);
+        auto constant_wire = std::dynamic_pointer_cast<proto::ConstantArithmeticWire<T>>(
+            constant_wire_original->GetWires()[0]);
+        assert(constant_wire);
+        auto non_constant_wire = std::dynamic_pointer_cast<proto::arithmetic_gmw::Wire<T>>(
+            non_constant_wire_original->GetWires()[0]);
+        assert(non_constant_wire);
 
-    auto addition_gate = std::make_shared<proto::ConstantArithmeticAdditionGate<T>>(
-        non_constant_wire, constant_wire);
-    share_->GetRegister()->RegisterNextGate(addition_gate);
-    auto result = std::static_pointer_cast<Share>(addition_gate->GetOutputAsArithmeticShare());
+        auto addition_gate =
+            share_->GetRegister()->EmplaceGate<proto::ConstantArithmeticAdditionGate<T>>(
+                non_constant_wire, constant_wire);
+        auto result = std::static_pointer_cast<Share>(addition_gate->GetOutputAsArithmeticShare());
 
-    return ShareWrapper(result);
+        return ShareWrapper(result);
+      }
+    }
+    case MpcProtocol::kAstra: {
+      auto this_a = std::dynamic_pointer_cast<proto::astra::Share<T>>(share);
+      assert(this_a);
+      auto this_wire_a = this_a->GetAstraWire();
+
+      auto other_a = std::dynamic_pointer_cast<proto::astra::Share<T>>(other);
+      assert(other_a);
+      auto other_wire_a = other_a->GetAstraWire();
+
+      auto addition_gate = share_->GetRegister()->EmplaceGate<proto::astra::AdditionGate<T>>(
+          this_wire_a, other_wire_a);
+      auto result = std::static_pointer_cast<Share>(addition_gate->GetOutputAsAstraShare());
+
+      return ShareWrapper(result);
+    }
+    default:
+      throw std::invalid_argument("Unsupported Arithmetic protocol in ShareWrapper::Add");
   }
 }
 
@@ -785,21 +1029,40 @@ template ShareWrapper ShareWrapper::Add<std::uint64_t>(SharePointer share,
 
 template <typename T>
 ShareWrapper ShareWrapper::Sub(SharePointer share, SharePointer other) const {
-  auto this_a = std::dynamic_pointer_cast<proto::arithmetic_gmw::Share<T>>(share);
-  assert(this_a);
-  auto this_wire_a = this_a->GetArithmeticWire();
+  assert(share->GetProtocol() == other->GetProtocol());
+  switch (share->GetProtocol()) {
+    case MpcProtocol::kArithmeticGmw: {
+      auto this_a = std::dynamic_pointer_cast<proto::arithmetic_gmw::Share<T>>(share);
+      assert(this_a);
+      auto this_wire_a = this_a->GetArithmeticWire();
 
-  auto other_a = std::dynamic_pointer_cast<proto::arithmetic_gmw::Share<T>>(other);
-  assert(other_a);
-  auto other_wire_a = other_a->GetArithmeticWire();
+      auto other_a = std::dynamic_pointer_cast<proto::arithmetic_gmw::Share<T>>(other);
+      assert(other_a);
+      auto other_wire_a = other_a->GetArithmeticWire();
 
-  auto subtraction_gate =
-      std::make_shared<proto::arithmetic_gmw::SubtractionGate<T>>(this_wire_a, other_wire_a);
-  auto addition_gate_cast = std::static_pointer_cast<Gate>(subtraction_gate);
-  share_->GetRegister()->RegisterNextGate(addition_gate_cast);
-  auto result = std::static_pointer_cast<Share>(subtraction_gate->GetOutputAsArithmeticShare());
+      auto subtraction_gate =
+          share_->GetRegister()->EmplaceGate<proto::arithmetic_gmw::SubtractionGate<T>>(
+              this_wire_a, other_wire_a);
+      auto result = std::static_pointer_cast<Share>(subtraction_gate->GetOutputAsArithmeticShare());
+      return ShareWrapper(result);
+    }
+    case MpcProtocol::kAstra: {
+      auto this_a = std::dynamic_pointer_cast<proto::astra::Share<T>>(share);
+      assert(this_a);
+      auto this_wire_a = this_a->GetAstraWire();
 
-  return ShareWrapper(result);
+      auto other_a = std::dynamic_pointer_cast<proto::astra::Share<T>>(other);
+      assert(other_a);
+      auto other_wire_a = other_a->GetAstraWire();
+
+      auto subtraction_gate = share_->GetRegister()->EmplaceGate<proto::astra::SubtractionGate<T>>(
+          this_wire_a, other_wire_a);
+      auto result = std::static_pointer_cast<Share>(subtraction_gate->GetOutputAsAstraShare());
+      return result;
+    }
+    default:
+      throw std::invalid_argument("Unsupported Arithmetic protocol in ShareWrapper::Sub");
+  }
 }
 
 template ShareWrapper ShareWrapper::Sub<std::uint8_t>(SharePointer share, SharePointer other) const;
@@ -812,44 +1075,127 @@ template ShareWrapper ShareWrapper::Sub<std::uint64_t>(SharePointer share,
 
 template <typename T>
 ShareWrapper ShareWrapper::Mul(SharePointer share, SharePointer other) const {
-  if (!share->IsConstant() && !other->IsConstant()) {
-    auto this_a = std::dynamic_pointer_cast<proto::arithmetic_gmw::Share<T>>(share);
-    assert(this_a);
-    auto this_wire_a = this_a->GetArithmeticWire();
+  assert(share->GetProtocol() == other->GetProtocol() ||
+         (share->GetCircuitType() == other->GetCircuitType() &&
+          share->IsConstant() != other->IsConstant()));
+  switch (share->GetProtocol()) {
+    case MpcProtocol::kArithmeticGmw: {
+      if (!share->IsConstant() && !other->IsConstant()) {
+        auto this_a = std::dynamic_pointer_cast<proto::arithmetic_gmw::Share<T>>(share);
+        assert(this_a);
+        auto this_wire_a = this_a->GetArithmeticWire();
 
-    auto other_a = std::dynamic_pointer_cast<proto::arithmetic_gmw::Share<T>>(other);
-    assert(other_a);
-    auto other_wire_a = other_a->GetArithmeticWire();
+        auto other_a = std::dynamic_pointer_cast<proto::arithmetic_gmw::Share<T>>(other);
+        assert(other_a);
+        auto other_wire_a = other_a->GetArithmeticWire();
+
+        auto multiplication_gate =
+            share_->GetRegister()->EmplaceGate<proto::arithmetic_gmw::MultiplicationGate<T>>(
+                this_wire_a, other_wire_a);
+        auto result =
+            std::static_pointer_cast<Share>(multiplication_gate->GetOutputAsArithmeticShare());
+
+        return ShareWrapper(result);
+      } else {
+        assert(!(share->IsConstant() && other->IsConstant()));
+        auto constant_wire_original = share;
+        auto non_constant_wire_original = other;
+        if (non_constant_wire_original->IsConstant())
+          std::swap(constant_wire_original, non_constant_wire_original);
+        assert(constant_wire_original->IsConstant() && !non_constant_wire_original->IsConstant());
+
+        auto constant_wire = std::dynamic_pointer_cast<proto::ConstantArithmeticWire<T>>(
+            constant_wire_original->GetWires()[0]);
+        assert(constant_wire);
+        auto non_constant_wire = std::dynamic_pointer_cast<proto::arithmetic_gmw::Wire<T>>(
+            non_constant_wire_original->GetWires()[0]);
+        assert(non_constant_wire);
+
+        auto multiplication_gate =
+            share_->GetRegister()->EmplaceGate<proto::ConstantArithmeticMultiplicationGate<T>>(
+                non_constant_wire, constant_wire);
+        auto result =
+            std::static_pointer_cast<Share>(multiplication_gate->GetOutputAsArithmeticShare());
+
+        return ShareWrapper(result);
+      }
+    }
+    case MpcProtocol::kAstra: {
+      auto this_a = std::dynamic_pointer_cast<proto::astra::Share<T>>(share);
+      assert(this_a);
+      auto this_wire_a = this_a->GetAstraWire();
+
+      auto other_a = std::dynamic_pointer_cast<proto::astra::Share<T>>(other);
+      assert(other_a);
+      auto other_wire_a = other_a->GetAstraWire();
+
+      auto multiplication_gate =
+          share_->GetRegister()->EmplaceGate<proto::astra::MultiplicationGate<T>>(this_wire_a,
+                                                                                  other_wire_a);
+      auto result = std::static_pointer_cast<Share>(multiplication_gate->GetOutputAsAstraShare());
+      return ShareWrapper(result);
+    }
+    default:
+      throw std::invalid_argument("Unsupported Arithmetic protocol in ShareWrapper::Mul");
+  }
+}
+
+template <typename T>
+ShareWrapper ShareWrapper::GreaterThan(SharePointer share, SharePointer other) const {
+  if (share_->GetCircuitType() != CircuitType::kArithmetic) {
+    throw std::invalid_argument("Trying to ShareWrapper::GreaterThan() with non-Arithmetic inputs");
+  } else if (share_->GetProtocol() != MpcProtocol::kArithmeticGmw) {
+    throw std::invalid_argument(
+        "ShareWrapper::GreaterThan() is implemented only for the arithmetic GMW protocol");
+  }
+
+  auto this_a = std::dynamic_pointer_cast<proto::arithmetic_gmw::Share<T>>(share);
+  assert(this_a);
+  auto this_wire_a = this_a->GetArithmeticWire();
+
+  auto other_a = std::dynamic_pointer_cast<proto::arithmetic_gmw::Share<T>>(other);
+  assert(other_a);
+  auto other_wire_a = other_a->GetArithmeticWire();
+
+  std::size_t l_s = 7;
+
+  auto greater_than_gate =
+      share_->GetRegister()->template EmplaceGate<proto::arithmetic_gmw::GreaterThanGate<T>>(
+          this_wire_a, other_wire_a, l_s);
+  auto result = std::static_pointer_cast<Share>(greater_than_gate->GetOutputAsGmwShare());
+
+  return ShareWrapper(result);
+}
+
+template ShareWrapper ShareWrapper::GreaterThan<std::uint8_t>(SharePointer share,
+                                                              SharePointer other) const;
+template ShareWrapper ShareWrapper::GreaterThan<std::uint16_t>(SharePointer share,
+                                                               SharePointer other) const;
+template ShareWrapper ShareWrapper::GreaterThan<std::uint32_t>(SharePointer share,
+                                                               SharePointer other) const;
+template ShareWrapper ShareWrapper::GreaterThan<std::uint64_t>(SharePointer share,
+                                                               SharePointer other) const;
+
+template <typename T>
+ShareWrapper ShareWrapper::HybridMul(SharePointer share_bit, SharePointer share_integer) const {
+  if (!share_bit->IsConstant() && !share_integer->IsConstant()) {
+    auto bgmw_share{std::dynamic_pointer_cast<proto::boolean_gmw::Share>(share_bit)};
+    assert(bgmw_share);
+    auto wire_bit{bgmw_share->GetWires()[0]};
+    auto bgmw_wire_bit{std::dynamic_pointer_cast<proto::boolean_gmw::Wire>(wire_bit)};
+
+    auto agmw_share = std::dynamic_pointer_cast<proto::arithmetic_gmw::Share<T>>(share_integer);
+    assert(agmw_share);
+    auto agmw_wire_integer{agmw_share->GetArithmeticWire()};
 
     auto multiplication_gate =
-        std::make_shared<proto::arithmetic_gmw::MultiplicationGate<T>>(this_wire_a, other_wire_a);
-    share_->GetRegister()->RegisterNextGate(multiplication_gate);
+        share_->GetRegister()->EmplaceGate<proto::arithmetic_gmw::HybridMultiplicationGate<T>>(
+            bgmw_wire_bit, agmw_wire_integer);
     auto result =
         std::static_pointer_cast<Share>(multiplication_gate->GetOutputAsArithmeticShare());
-
     return ShareWrapper(result);
   } else {
-    assert(!(share->IsConstant() && other->IsConstant()));
-    auto constant_wire_original = share;
-    auto non_constant_wire_original = other;
-    if (non_constant_wire_original->IsConstant())
-      std::swap(constant_wire_original, non_constant_wire_original);
-    assert(constant_wire_original->IsConstant() && !non_constant_wire_original->IsConstant());
-
-    auto constant_wire = std::dynamic_pointer_cast<proto::ConstantArithmeticWire<T>>(
-        constant_wire_original->GetWires()[0]);
-    assert(constant_wire);
-    auto non_constant_wire = std::dynamic_pointer_cast<proto::arithmetic_gmw::Wire<T>>(
-        non_constant_wire_original->GetWires()[0]);
-    assert(non_constant_wire);
-
-    auto multiplication_gate = std::make_shared<proto::ConstantArithmeticMultiplicationGate<T>>(
-        non_constant_wire, constant_wire);
-    share_->GetRegister()->RegisterNextGate(multiplication_gate);
-    auto result =
-        std::static_pointer_cast<Share>(multiplication_gate->GetOutputAsArithmeticShare());
-
-    return ShareWrapper(result);
+    throw(std::runtime_error("Hybrid Multiplication is not implemented for constants, yet."));
   }
 }
 
@@ -859,11 +1205,9 @@ ShareWrapper ShareWrapper::Square(SharePointer share) const {
   assert(this_a);
   auto this_wire_a = this_a->GetArithmeticWire();
 
-  auto square_gate = std::make_shared<proto::arithmetic_gmw::SquareGate<T>>(this_wire_a);
-  auto square_gate_cast = std::static_pointer_cast<Gate>(square_gate);
-  share_->GetRegister()->RegisterNextGate(square_gate_cast);
+  auto square_gate =
+      share_->GetRegister()->EmplaceGate<proto::arithmetic_gmw::SquareGate<T>>(this_wire_a);
   auto result = std::static_pointer_cast<Share>(square_gate->GetOutputAsArithmeticShare());
-
   return ShareWrapper(result);
 }
 
@@ -875,21 +1219,62 @@ template ShareWrapper ShareWrapper::Mul<std::uint32_t>(SharePointer share,
 template ShareWrapper ShareWrapper::Mul<std::uint64_t>(SharePointer share,
                                                        SharePointer other) const;
 
+template ShareWrapper ShareWrapper::HybridMul<std::uint8_t>(SharePointer share,
+                                                            SharePointer other) const;
+template ShareWrapper ShareWrapper::HybridMul<std::uint16_t>(SharePointer share,
+                                                             SharePointer other) const;
+template ShareWrapper ShareWrapper::HybridMul<std::uint32_t>(SharePointer share,
+                                                             SharePointer other) const;
+template ShareWrapper ShareWrapper::HybridMul<std::uint64_t>(SharePointer share,
+                                                             SharePointer other) const;
+template <typename T>
+ShareWrapper ShareWrapper::DotProduct(std::span<ShareWrapper> a, std::span<ShareWrapper> b) const {
+  switch (a[0]->GetProtocol()) {
+    case MpcProtocol::kAstra: {
+      std::vector<WirePointer> a_input;
+      std::vector<WirePointer> b_input;
+      a_input.reserve(a.size());
+      b_input.reserve(b.size());
+
+      for (auto i = 0u; i != a.size(); ++i) {
+        auto share_a = std::dynamic_pointer_cast<proto::astra::Share<T>>(a[i].share_);
+        assert(share_a);
+        a_input.emplace_back(share_a->GetAstraWire());
+
+        auto share_b = std::dynamic_pointer_cast<proto::astra::Share<T>>(b[i].share_);
+        assert(share_b);
+        b_input.emplace_back(share_b->GetAstraWire());
+      }
+      auto dot_product_gate = share_->GetRegister()->EmplaceGate<proto::astra::DotProductGate<T>>(
+          std::move(a_input), std::move(b_input));
+      auto result = std::static_pointer_cast<Share>(dot_product_gate->GetOutputAsAstraShare());
+      return ShareWrapper(result);
+    }
+    default:
+      throw std::invalid_argument("Unsupported Arithmetic protocol in ShareWrapper::DotProduct");
+  }
+}
+
+template ShareWrapper ShareWrapper::DotProduct<std::uint8_t>(std::span<ShareWrapper> a,
+                                                             std::span<ShareWrapper> b) const;
+template ShareWrapper ShareWrapper::DotProduct<std::uint16_t>(std::span<ShareWrapper> a,
+                                                              std::span<ShareWrapper> b) const;
+template ShareWrapper ShareWrapper::DotProduct<std::uint32_t>(std::span<ShareWrapper> a,
+                                                              std::span<ShareWrapper> b) const;
+template ShareWrapper ShareWrapper::DotProduct<std::uint64_t>(std::span<ShareWrapper> a,
+                                                              std::span<ShareWrapper> b) const;
+
 ShareWrapper ShareWrapper::Subset(std::vector<std::size_t>&& positions) {
   return Subset(std::span<const std::size_t>(positions));
 }
 
 ShareWrapper ShareWrapper::Subset(std::span<const std::size_t> positions) {
-  auto subset_gate = std::make_shared<SubsetGate>(share_, positions);
-  auto subset_gate_cast = std::static_pointer_cast<Gate>(subset_gate);
-  share_->GetRegister()->RegisterNextGate(subset_gate_cast);
+  auto subset_gate = share_->GetRegister()->EmplaceGate<SubsetGate>(share_, positions);
   return ShareWrapper(subset_gate->GetOutputAsShare());
 }
 
 std::vector<ShareWrapper> ShareWrapper::Unsimdify() {
-  auto unsimdify_gate = std::make_shared<UnsimdifyGate>(share_);
-  auto unsimdify_gate_cast = std::static_pointer_cast<Gate>(unsimdify_gate);
-  share_->GetRegister()->RegisterNextGate(unsimdify_gate_cast);
+  auto unsimdify_gate = share_->GetRegister()->EmplaceGate<UnsimdifyGate>(share_);
   std::vector<SharePointer> shares{unsimdify_gate->GetOutputAsVectorOfShares()};
   std::vector<ShareWrapper> result(shares.size());
   std::transform(shares.begin(), shares.end(), result.begin(),
@@ -906,9 +1291,7 @@ ShareWrapper ShareWrapper::Simdify(std::span<const ShareWrapper> input) {
 
 ShareWrapper ShareWrapper::Simdify(std::span<SharePointer> input) {
   if (input.empty()) throw std::invalid_argument("Empty inputs in ShareWrapper::Simdify");
-  auto simdify_gate = std::make_shared<SimdifyGate>(input);
-  auto simdify_gate_cast = std::static_pointer_cast<Gate>(simdify_gate);
-  input[0]->GetRegister()->RegisterNextGate(simdify_gate_cast);
+  auto simdify_gate = input[0]->GetRegister()->EmplaceGate<SimdifyGate>(input);
   return simdify_gate->GetOutputAsShare();
 }
 

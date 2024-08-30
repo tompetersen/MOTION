@@ -1,6 +1,6 @@
 // MIT License
 //
-// Copyright (c) 2019 Oleksandr Tkachenko
+// Copyright (c) 2021 Oleksandr Tkachenko, Arianne Roselina Prananto
 // Cryptography and Privacy Engineering Group (ENCRYPTO)
 // TU Darmstadt, Germany
 //
@@ -26,10 +26,16 @@
 
 #include <fmt/format.h>
 #include <memory>
+#include <span>
 #include <vector>
 
 #include "base/backend.h"
 #include "base/configuration.h"
+#include "protocols/arithmetic_gmw/arithmetic_gmw_share.h"
+#include "protocols/arithmetic_gmw/arithmetic_gmw_wire.h"
+#include "protocols/boolean_gmw/boolean_gmw_share.h"
+#include "protocols/boolean_gmw/boolean_gmw_wire.h"
+#include "protocols/share.h"
 #include "utility/typedefs.h"
 
 namespace encrypto::motion::communication {
@@ -49,19 +55,18 @@ class Party {
   // Let's make only Configuration be copyable
   Party(Party& party) = delete;
 
-  Party(std::unique_ptr<communication::CommunicationLayer> parties);
+  Party(std::unique_ptr<communication::CommunicationLayer> communication_layer);
 
   ~Party();
 
   ConfigurationPointer GetConfiguration() { return configuration_; }
 
-  communication::CommunicationLayer& GetCommunicationLayer() { return *communication_layer_; }
-
   template <MpcProtocol P>
-  SharePointer In(const std::vector<BitVector<>>& input,
+  SharePointer In(std::span<const BitVector<>> input,
                   std::size_t party_id = std::numeric_limits<std::size_t>::max()) {
     static_assert(P != MpcProtocol::kArithmeticGmw);
     static_assert(P != MpcProtocol::kArithmeticConstant);
+    static_assert(P != MpcProtocol::kAstra);
     switch (P) {
       case MpcProtocol::kBooleanConstant: {
         // TODO implement
@@ -74,9 +79,41 @@ class Party {
       case MpcProtocol::kBmr: {
         return backend_->BmrInput(party_id, input);
       }
+      case MpcProtocol::kGarbledCircuit: {
+        return backend_->GarbledCircuitInput(party_id, input);
+      }
       default: {
         throw(std::runtime_error(
-            fmt::format("Unknown MPC protocol with id {}", static_cast<uint>(P))));
+            fmt::format("Unknown MPC protocol with id {}", static_cast<unsigned int>(P))));
+      }
+    }
+  }
+
+  template <MpcProtocol P>
+  std::pair<SharePointer, ReusableFiberPromise<std::vector<BitVector<>>>*> In(
+      std::size_t input_owner_id, std::size_t number_of_wires, std::size_t number_of_simd) {
+    switch (P) {
+      case MpcProtocol::kBooleanConstant: {
+        // TODO implement
+        static_assert(P != MpcProtocol::kBooleanConstant, "Not implemented yet");
+        // return backend_->BooleanGmwInput(party_id, input);
+      }
+      case MpcProtocol::kBooleanGmw: {
+        // TODO implement
+        static_assert(P != MpcProtocol::kBooleanGmw, "Not implemented yet");
+        // return backend_->BooleanGmwInput(party_id, input);
+      }
+      case MpcProtocol::kBmr: {
+        // TODO implement
+        static_assert(P != MpcProtocol::kBmr, "Not implemented yet");
+        // return backend_->BmrInput(party_id, input);
+      }
+      case MpcProtocol::kGarbledCircuit: {
+        return backend_->GarbledCircuitInput(input_owner_id, number_of_wires, number_of_simd);
+      }
+      default: {
+        throw std::runtime_error(fmt::format("Unknown or unimplemented MPC protocol with id {}",
+                                             static_cast<unsigned int>(P)));
       }
     }
   }
@@ -86,6 +123,7 @@ class Party {
                   std::size_t party_id = std::numeric_limits<std::size_t>::max()) {
     static_assert(P != MpcProtocol::kArithmeticGmw);
     static_assert(P != MpcProtocol::kArithmeticConstant);
+    static_assert(P != MpcProtocol::kAstra);
     switch (P) {
       case MpcProtocol::kBooleanConstant: {
         // TODO implement
@@ -98,9 +136,12 @@ class Party {
       case MpcProtocol::kBmr: {
         return backend_->BmrInput(party_id, input);
       }
+      case MpcProtocol::kGarbledCircuit: {
+        return backend_->GarbledCircuitInput(party_id, input);
+      }
       default: {
         throw(std::runtime_error(
-            fmt::format("Unknown MPC protocol with id {}", static_cast<uint>(P))));
+            fmt::format("Unknown MPC protocol with id {}", static_cast<unsigned int>(P))));
       }
     }
   }
@@ -110,6 +151,7 @@ class Party {
                   std::size_t party_id = std::numeric_limits<std::size_t>::max()) {
     static_assert(P != MpcProtocol::kArithmeticGmw);
     static_assert(P != MpcProtocol::kArithmeticConstant);
+    static_assert(P != MpcProtocol::kAstra);
     switch (P) {
       case MpcProtocol::kBooleanConstant: {
         // TODO implement
@@ -124,7 +166,7 @@ class Party {
       }
       default: {
         throw(std::runtime_error(
-            fmt::format("Unknown MPC protocol with id {}", static_cast<uint>(P))));
+            fmt::format("Unknown MPC protocol with id {}", static_cast<unsigned int>(P))));
       }
     }
   }
@@ -134,6 +176,7 @@ class Party {
                   std::size_t party_id = std::numeric_limits<std::size_t>::max()) {
     static_assert(P != MpcProtocol::kArithmeticGmw);
     static_assert(P != MpcProtocol::kArithmeticConstant);
+    static_assert(P != MpcProtocol::kAstra);
     switch (P) {
       case MpcProtocol::kBooleanConstant: {
         // TODO implement
@@ -148,21 +191,33 @@ class Party {
       }
       default: {
         throw(std::runtime_error(
-            fmt::format("Unknown MPC protocol with id {}", static_cast<uint>(P))));
+            fmt::format("Unknown MPC protocol with id {}", static_cast<unsigned int>(P))));
       }
     }
   }
 
-  template <MpcProtocol P, typename T = std::uint8_t,
-            typename = std::enable_if_t<std::is_unsigned_v<T>>>
+  template <MpcProtocol P, typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
   SharePointer In(const std::vector<T>& input,
                   std::size_t party_id = std::numeric_limits<std::size_t>::max()) {
     switch (P) {
       case MpcProtocol::kArithmeticConstant: {
-        return backend_->ConstantArithmeticGmwInput(input);
+        if constexpr (std::is_unsigned_v<T>) {
+          return backend_->ConstantArithmeticGmwInput<T>(input);
+        } else {
+          return backend_->ConstantArithmeticGmwInput<std::make_unsigned_t<T>>(
+              ToTwosComplement<T>(input));
+        }
       }
       case MpcProtocol::kArithmeticGmw: {
-        return backend_->ArithmeticGmwInput(party_id, input);
+        if constexpr (std::is_unsigned_v<T>) {
+          return backend_->ArithmeticGmwInput<T>(party_id, input);
+        } else {
+          return backend_->ArithmeticGmwInput<std::make_unsigned_t<T>>(party_id,
+                                                                       ToTwosComplement<T>(input));
+        }
+      }
+      case MpcProtocol::kAstra: {
+        return backend_->AstraInput<T>(party_id, input);
       }
       case MpcProtocol::kBooleanGmw: {
         throw std::runtime_error(
@@ -176,21 +231,33 @@ class Party {
       }
       default: {
         throw(std::runtime_error(
-            fmt::format("Unknown MPC protocol with id {}", static_cast<uint>(P))));
+            fmt::format("Unknown MPC protocol with id {}", static_cast<unsigned int>(P))));
       }
     }
   }
 
-  template <MpcProtocol P, typename T = std::uint8_t,
-            typename = std::enable_if_t<std::is_unsigned_v<T>>>
+  template <MpcProtocol P, typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
   SharePointer In(std::vector<T>&& input,
                   std::size_t party_id = std::numeric_limits<std::size_t>::max()) {
     switch (P) {
       case MpcProtocol::kArithmeticConstant: {
-        return backend_->ConstantArithmeticGmwInput(std::move(input));
+        if constexpr (std::is_unsigned_v<T>) {
+          return backend_->ConstantArithmeticGmwInput<T>(input);
+        } else {
+          return backend_->ConstantArithmeticGmwInput<std::make_unsigned_t<T>>(
+              ToTwosComplement<T>(input));
+        }
       }
       case MpcProtocol::kArithmeticGmw: {
-        return backend_->ArithmeticGmwInput(party_id, std::move(input));
+        if constexpr (std::is_unsigned_v<T>) {
+          return backend_->ArithmeticGmwInput<T>(party_id, input);
+        } else {
+          return backend_->ArithmeticGmwInput<std::make_unsigned_t<T>>(party_id,
+                                                                       ToTwosComplement<T>(input));
+        }
+      }
+      case MpcProtocol::kAstra: {
+        return backend_->AstraInput<T>(party_id, std::move(input));
       }
       case MpcProtocol::kBooleanGmw: {
         throw(std::runtime_error(
@@ -204,13 +271,12 @@ class Party {
       }
       default: {
         throw(std::runtime_error(
-            fmt::format("Unknown MPC protocol with id {}", static_cast<uint>(P))));
+            fmt::format("Unknown MPC protocol with id {}", static_cast<unsigned int>(P))));
       }
     }
   }
 
-  template <MpcProtocol P, typename T = std::uint8_t,
-            typename = std::enable_if_t<std::is_unsigned_v<T>>>
+  template <MpcProtocol P, typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
   SharePointer In(T input, std::size_t party_id = std::numeric_limits<std::size_t>::max()) {
     if constexpr (std::is_same_v<T, bool>) {
       if constexpr (P == MpcProtocol::kBooleanGmw)
@@ -222,13 +288,113 @@ class Party {
     }
   }
 
-  SharePointer Xor(const SharePointer& a, const SharePointer& b);
+  template <MpcProtocol P, typename T = std::uint8_t,
+            typename = std::enable_if_t<std::is_unsigned_v<T>>>
+  SharePointer SharedIn(T input) {
+    switch (P) {
+      case MpcProtocol::kArithmeticConstant: {
+        static_assert(P != MpcProtocol::kArithmeticConstant, "Not implemented yet");
+      }
+      case MpcProtocol::kArithmeticGmw: {
+        encrypto::motion::RegisterPointer register_pointer{backend_->GetRegister()};
+
+        encrypto::motion::WirePointer wire =
+            register_pointer->EmplaceWire<encrypto::motion::proto::arithmetic_gmw::Wire<T>>(
+                input, *backend_);
+        wire->SetOnlineFinished();
+
+        return std::make_shared<encrypto::motion::proto::arithmetic_gmw::Share<T>>(wire);
+      }
+      case MpcProtocol::kAstra: {
+        static_assert(P != MpcProtocol::kAstra, "Not implemented yet");
+      }
+      case MpcProtocol::kBooleanGmw: {
+        throw std::runtime_error(
+            "Non-binary types have to be converted to BitVectors in BooleanGMW, "
+            "consider using TODO function for the input");
+      }
+      case MpcProtocol::kBmr: {
+        throw std::runtime_error(
+            "Non-binary types have to be converted to BitVectors in BMR, "
+            "consider using TODO function for the input");
+      }
+      default: {
+        throw(std::runtime_error(
+            fmt::format("Unknown MPC protocol with id {}", static_cast<unsigned int>(P))));
+      }
+    }
+  }
+
+  template <MpcProtocol P, typename T = std::uint8_t,
+            typename = std::enable_if_t<std::is_unsigned_v<T>>>
+  SharePointer SharedIn(const std::vector<T>& input) {
+    switch (P) {
+      case MpcProtocol::kArithmeticConstant: {
+        static_assert(P != MpcProtocol::kArithmeticConstant, "Not implemented yet");
+      }
+      case MpcProtocol::kArithmeticGmw: {
+        encrypto::motion::RegisterPointer register_pointer{backend_->GetRegister()};
+
+        encrypto::motion::WirePointer wire =
+            register_pointer->EmplaceWire<encrypto::motion::proto::arithmetic_gmw::Wire<T>>(
+                input, *backend_);
+        wire->SetOnlineFinished();
+
+        return std::make_shared<encrypto::motion::proto::arithmetic_gmw::Share<T>>(wire);
+      }
+      case MpcProtocol::kAstra: {
+        static_assert(P != MpcProtocol::kAstra, "Not implemented yet");
+      }
+      case MpcProtocol::kBooleanGmw: {
+        throw std::runtime_error(
+            "Non-binary types have to be converted to BitVectors in BooleanGMW, "
+            "consider using TODO function for the input");
+      }
+      case MpcProtocol::kBmr: {
+        throw std::runtime_error(
+            "Non-binary types have to be converted to BitVectors in BMR, "
+            "consider using TODO function for the input");
+      }
+      default: {
+        throw(std::runtime_error(
+            fmt::format("Unknown MPC protocol with id {}", static_cast<unsigned int>(P))));
+      }
+    }
+  }
+
+  template <MpcProtocol P>
+  SharePointer SharedIn(std::span<const BitVector<>> input) {
+    static_assert(P != MpcProtocol::kArithmeticGmw);
+    static_assert(P != MpcProtocol::kArithmeticConstant);
+    static_assert(P != MpcProtocol::kAstra);
+
+    switch (P) {
+      case MpcProtocol::kBooleanConstant: {
+        static_assert(P != MpcProtocol::kBooleanConstant, "Not implemented yet");
+      }
+      case MpcProtocol::kBooleanGmw: {
+        std::vector<encrypto::motion::WirePointer> wires(input.size());
+        encrypto::motion::RegisterPointer register_pointer{backend_->GetRegister()};
+
+        for (std::size_t i = 0; i < wires.size(); i++) {
+          wires[i] = register_pointer->EmplaceWire<encrypto::motion::proto::boolean_gmw::Wire>(
+              input[i], *backend_);
+          wires[i]->SetOnlineFinished();
+        }
+
+        return std::make_shared<encrypto::motion::proto::boolean_gmw::Share>(wires);
+      }
+      case MpcProtocol::kBmr: {
+        static_assert(P != MpcProtocol::kBmr, "Not implemented yet");
+      }
+      default: {
+        throw(std::runtime_error(
+            fmt::format("Unknown MPC protocol with id {}", static_cast<unsigned int>(P))));
+      }
+    }
+  }
 
   SharePointer Out(SharePointer parent, std::size_t output_owner);
-
-  SharePointer Add(const SharePointer& a, const SharePointer& b);
-
-  SharePointer And(const SharePointer& a, const SharePointer& b);
 
   /// \brief Evaluates the constructed gates a predefined number of times.
   /// This is realized via repeatedly calling Party::Clear() after each evaluation.
@@ -260,12 +426,10 @@ class Party {
   auto& GetBackend() { return backend_; }
 
  private:
-  std::unique_ptr<communication::CommunicationLayer> communication_layer_;
   ConfigurationPointer configuration_;
   std::shared_ptr<Logger> logger_;
   BackendPointer backend_;
   std::atomic<bool> finished_ = false;
-  std::atomic<bool> connected_ = false;
 
   void EvaluateCircuit();
 };
@@ -275,8 +439,8 @@ class Party {
 /// @param port TCP port offset.
 /// @param logging Enables/disables logging completely.
 std::vector<std::unique_ptr<Party>> MakeLocallyConnectedParties(const std::size_t number_of_parties,
-                                                            std::uint16_t port,
-                                                            const bool logging = false);
+                                                                std::uint16_t port,
+                                                                const bool logging = false);
 
 using PartyPointer = std::unique_ptr<Party>;
 

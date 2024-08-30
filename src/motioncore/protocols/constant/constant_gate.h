@@ -44,7 +44,7 @@ using SharePointer = std::shared_ptr<Share>;
 class ConstantBooleanInputGate final : public Gate {
  public:
   ConstantBooleanInputGate(bool b, Backend& backend)
-      : ConstantBooleanInputGate(BitVector<>(b), backend) {}
+      : ConstantBooleanInputGate(BitVector<>(1, b), backend) {}
 
   ConstantBooleanInputGate(BitVector<>&& bv, Backend& backend)
       : ConstantBooleanInputGate(std::vector<BitVector<>>{std::move(bv)}, backend) {}
@@ -58,18 +58,13 @@ class ConstantBooleanInputGate final : public Gate {
 
   ~ConstantBooleanInputGate() final = default;
 
-  void InitializationHelper();
+  void EvaluateSetup() final override {}
 
-  void EvaluateSetup() final override {
-    SetSetupIsReady();
-    GetRegister().IncrementEvaluatedGatesSetupCounter();
-  }
+  void EvaluateOnline() final override {}
 
-  void EvaluateOnline() final override {
-    WaitSetup();
-    SetOnlineIsReady();
-    GetRegister().IncrementEvaluatedGatesOnlineCounter();
-  }
+  bool NeedsSetup() const override { return false; }
+
+  bool NeedsOnline() const override { return false; }
 
   motion::SharePointer GetOutputAsShare() const;
 };
@@ -84,32 +79,13 @@ class ConstantArithmeticInputGate final : public Gate {
 
   ~ConstantArithmeticInputGate() final = default;
 
-  void InitializationHelper() {
-    static_assert(!std::is_same_v<T, bool>);
+  void EvaluateSetup() final override {}
 
-    gate_id_ = GetRegister().NextGateId();
-    if constexpr (kVerboseDebug) {
-      GetLogger().LogTrace(
-          fmt::format("Created a ConstantArithmeticInputGate with global id {}", gate_id_));
-    }
+  void EvaluateOnline() final override {}
 
-    for (auto& w : output_wires_) GetRegister().RegisterNextWire(w);
+  bool NeedsSetup() const override { return false; }
 
-    auto gate_info = fmt::format("uint{}_t type, gate id {}", sizeof(T) * 8, gate_id_);
-    GetLogger().LogDebug(fmt::format(
-        "Allocated a ConstantArithmeticInputGate with following properties: {}", gate_info));
-  }
-
-  void EvaluateSetup() final override {
-    SetSetupIsReady();
-    GetRegister().IncrementEvaluatedGatesSetupCounter();
-  };
-
-  void EvaluateOnline() final override {
-    WaitSetup();
-    SetOnlineIsReady();
-    GetRegister().IncrementEvaluatedGatesOnlineCounter();
-  };
+  bool NeedsOnline() const override { return false; }
 
   motion::SharePointer GetOutputAsShare() const;
 };
@@ -134,20 +110,9 @@ class ConstantArithmeticAdditionGate final : public TwoGate {
     // needs some mediocre implementation effort if implemented with a deferred inputs option
     assert(!parent_a_.at(0)->IsConstant() && parent_b_.at(0)->IsConstant());
 
-    requires_online_interaction_ = false;
-    gate_type_ = GateType::kNonInteractive;
-
-    gate_id_ = GetRegister().NextGateId();
-
-    RegisterWaitingFor(parent_a_.at(0)->GetWireId());
-    parent_a_.at(0)->RegisterWaitingGate(gate_id_);
-
-    RegisterWaitingFor(parent_b_.at(0)->GetWireId());
-    parent_b_.at(0)->RegisterWaitingGate(gate_id_);
-
     {
-      auto w = std::make_shared<arithmetic_gmw::Wire<T>>(backend_, a->GetNumberOfSimdValues());
-      GetRegister().RegisterNextWire(w);
+      auto w = GetRegister().template EmplaceWire<arithmetic_gmw::Wire<T>>(
+          backend_, a->GetNumberOfSimdValues());
       output_wires_ = {std::move(w)};
     }
 
@@ -160,15 +125,10 @@ class ConstantArithmeticAdditionGate final : public TwoGate {
 
   ~ConstantArithmeticAdditionGate() final = default;
 
-  void EvaluateSetup() final override {
-    SetSetupIsReady();
-    GetRegister().IncrementEvaluatedGatesSetupCounter();
-  }
+  void EvaluateSetup() final override {}
 
   void EvaluateOnline() final override {
-    WaitSetup();
-    assert(setup_is_ready_);
-
+    // nothing to setup, no need to wait/check
     parent_a_.at(0)->GetIsReadyCondition().Wait();
     parent_b_.at(0)->GetIsReadyCondition().Wait();
 
@@ -186,7 +146,7 @@ class ConstantArithmeticAdditionGate final : public TwoGate {
     std::vector<T> output;
     if (GetCommunicationLayer().GetMyId() ==
         (gate_id_ % GetCommunicationLayer().GetNumberOfParties())) {
-      output = RestrictAddVectors(constant_wire->GetValues(), non_constant_wire->GetValues());
+      output = RestrictAddVectors<T>(constant_wire->GetValues(), non_constant_wire->GetValues());
     } else {
       output = non_constant_wire->GetValues();
     }
@@ -196,9 +156,9 @@ class ConstantArithmeticAdditionGate final : public TwoGate {
 
     GetLogger().LogDebug(
         fmt::format("Evaluated arithmetic_gmw::AdditionGate with id#{}", gate_id_));
-    SetOnlineIsReady();
-    GetRegister().IncrementEvaluatedGatesOnlineCounter();
   }
+
+  bool NeedsSetup() const override { return false; }
 
   // perhaps, we should return a copy of the pointer and not move it for the
   // case we need it multiple times
@@ -233,21 +193,9 @@ class ConstantArithmeticMultiplicationGate final : public TwoGate {
     // TODO: a separate gate for this probably rather rare case
     // needs some mediocre implementation effort if implemented with a deferred inputs option
     assert(!parent_a_.at(0)->IsConstant() && parent_b_.at(0)->IsConstant());
-
-    requires_online_interaction_ = false;
-    gate_type_ = GateType::kNonInteractive;
-
-    gate_id_ = GetRegister().NextGateId();
-
-    RegisterWaitingFor(parent_a_.at(0)->GetWireId());
-    parent_a_.at(0)->RegisterWaitingGate(gate_id_);
-
-    RegisterWaitingFor(parent_b_.at(0)->GetWireId());
-    parent_b_.at(0)->RegisterWaitingGate(gate_id_);
-
     {
-      auto w = std::make_shared<arithmetic_gmw::Wire<T>>(backend_, a->GetNumberOfSimdValues());
-      GetRegister().RegisterNextWire(w);
+      auto w = GetRegister().template EmplaceWire<arithmetic_gmw::Wire<T>>(
+          backend_, a->GetNumberOfSimdValues());
       output_wires_ = {std::move(w)};
     }
 
@@ -255,20 +203,15 @@ class ConstantArithmeticMultiplicationGate final : public TwoGate {
         fmt::format("uint{}_t type, gate id {}, parents: {}, {}", sizeof(T) * 8, gate_id_,
                     parent_a_.at(0)->GetWireId(), parent_b_.at(0)->GetWireId());
     GetLogger().LogDebug(fmt::format(
-        "Created an ConstantArithmeticAdditionGate with following properties: {}", gate_info));
+        "Created an ConstantArithmeticMultiplicationGate with following properties: {}", gate_info));
   }
 
   ~ConstantArithmeticMultiplicationGate() final = default;
 
-  void EvaluateSetup() final override {
-    SetSetupIsReady();
-    GetRegister().IncrementEvaluatedGatesSetupCounter();
-  }
+  void EvaluateSetup() final override {}
 
   void EvaluateOnline() final override {
-    WaitSetup();
-    assert(setup_is_ready_);
-
+    // nothing to setup, no need to wait/check
     parent_a_.at(0)->GetIsReadyCondition().Wait();
     parent_b_.at(0)->GetIsReadyCondition().Wait();
 
@@ -284,16 +227,16 @@ class ConstantArithmeticMultiplicationGate final : public TwoGate {
     assert(constant_wire);
 
     std::vector<T> output =
-        RestrictMulVectors(constant_wire->GetValues(), non_constant_wire->GetValues());
+        RestrictMulVectors<T>(constant_wire->GetValues(), non_constant_wire->GetValues());
 
     auto arithmetic_wire = std::dynamic_pointer_cast<arithmetic_gmw::Wire<T>>(output_wires_.at(0));
     arithmetic_wire->GetMutableValues() = std::move(output);
 
     GetLogger().LogDebug(
-        fmt::format("Evaluated arithmetic_gmw::AdditionGate with id#{}", gate_id_));
-    SetOnlineIsReady();
-    GetRegister().IncrementEvaluatedGatesOnlineCounter();
+        fmt::format("Evaluated arithmetic_gmw::MultiplicationGate with id#{}", gate_id_));
   }
+
+  bool NeedsSetup() const override { return false; }
 
   // perhaps, we should return a copy of the pointer and not move it for the
   // case we need it multiple times

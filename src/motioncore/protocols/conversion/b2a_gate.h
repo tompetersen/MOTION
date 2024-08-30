@@ -53,38 +53,23 @@ class GmwToArithmeticGate final : public OneGate {
       assert(wire->GetProtocol() == MpcProtocol::kBooleanGmw);
     }
 
-    requires_online_interaction_ = true;
-    gate_type_ = GateType::kInteractive;
-
     // create the output wire
-    output_wires_.emplace_back(
-        std::make_shared<proto::arithmetic_gmw::Wire<T>>(backend_, number_of_simd));
-    GetRegister().RegisterNextWire(output_wires_.at(0));
+    output_wires_.emplace_back(GetRegister().template EmplaceWire<proto::arithmetic_gmw::Wire<T>>(
+        backend_, number_of_simd));
 
     std::vector<WirePointer> dummy_wires;
     dummy_wires.reserve(number_of_simd);
     for (std::size_t i = 0; i < bit_size; ++i) {
-      auto w = std::make_shared<proto::boolean_gmw::Wire>(backend_, number_of_simd);
-      GetRegister().RegisterNextWire(w);
-      dummy_wires.emplace_back(std::move(w));
+      dummy_wires.emplace_back(
+          GetRegister().template EmplaceWire<proto::boolean_gmw::Wire>(backend_, number_of_simd));
     }
     ts_ = std::make_shared<proto::boolean_gmw::Share>(dummy_wires);
     // also create an output gate for the ts
-    ts_output_ = std::make_shared<proto::boolean_gmw::OutputGate>(ts_);
-    GetRegister().RegisterNextGate(ts_output_);
+    ts_output_ = GetRegister().template EmplaceGate<proto::boolean_gmw::OutputGate>(ts_);
 
     // register the required number of shared bits
     number_of_sbs_ = number_of_simd * bit_size;
     sb_offset_ = GetSbProvider().template RequestSbs<T>(number_of_sbs_);
-
-    // register this gate
-    gate_id_ = GetRegister().NextGateId();
-
-    // register this gate with the parent wires
-    for (auto& wire : parent_) {
-      RegisterWaitingFor(wire->GetWireId());
-      wire->RegisterWaitingGate(gate_id_);
-    }
 
     if constexpr (kDebug) {
       auto gate_info = fmt::format("gate id {}, parent wires: ", gate_id_);
@@ -98,14 +83,10 @@ class GmwToArithmeticGate final : public OneGate {
 
   ~GmwToArithmeticGate() final = default;
 
-  void EvaluateSetup() final {
-    SetSetupIsReady();
-    GetRegister().IncrementEvaluatedGatesSetupCounter();
-  }
+  void EvaluateSetup() final {}
 
   void EvaluateOnline() final {
-    WaitSetup();
-    assert(setup_is_ready_);
+    // nothing to setup, no need to wait/check
 
     // wait for the parent wires to obtain their values
     for (const auto& wire : parent_) {
@@ -164,9 +145,9 @@ class GmwToArithmeticGate final : public OneGate {
     }
 
     GetLogger().LogDebug(fmt::format("Evaluated B2AGate with id#{}", gate_id_));
-    SetOnlineIsReady();
-    GetRegister().IncrementEvaluatedGatesOnlineCounter();
   }
+
+  bool NeedsSetup() const override { return false; }
 
   const proto::arithmetic_gmw::SharePointer<T> GetOutputAsArithmeticShare() const {
     auto arithmetic_wire =

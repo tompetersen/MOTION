@@ -1,7 +1,11 @@
 cmake_minimum_required(VERSION 3.12)
 cmake_policy(SET CMP0075 NEW)
+
 project(MOTION LANGUAGES CXX)
-set(MOTION_VERSION 0.01)
+
+set(MOTION_VERSION_MAJOR 0)
+set(MOTION_VERSION_MINOR 1)
+set(MOTION_VERSION_PATCH 1)
 
 string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
 
@@ -12,6 +16,7 @@ endif ()
 option(MOTION_BUILD_EXE "Build executables" OFF)
 option(MOTION_BUILD_TESTS "Build tests" OFF)
 option(MOTION_BUILD_DOC "Build documentation" OFF)
+option(MOTION_LINK_TCMALLOC "Link against tcmalloc" OFF)
 set(MOTION_USE_AVX OFF CACHE STRING "Use AVX/AVX2/AVX512/AVX512VAES instructions")
 set_property(CACHE MOTION_USE_AVX PROPERTY STRINGS OFF AVX AVX2 AVX512 AVX512VAES)
 
@@ -21,19 +26,22 @@ find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(OpenMP REQUIRED)
 
-# At least boost 1.73.0 is needed to use the C++20 standard.
-set(REQUIRED_BOOST_VERSION "1.73.0")
-
-find_package(Boost QUIET ${REQUIRED_BOOST_VERSION}
-        COMPONENTS
-        context
+# At least boost 1.75.0 is needed to use Boost::json.
+set(MOTION_Boost_VERSION "1.75.0")
+list(APPEND MOTION_Boost_COMPONENTS
+	context
         fiber
         filesystem
+        json
         log
         log_setup
         program_options
         system
         thread)
+
+find_package(Boost QUIET ${MOTION_Boost_VERSION}
+        COMPONENTS
+        ${MOTION_Boost_COMPONENTS})
 set(Boost_USE_STATIC_LIBS ON)
 
 set(MOTION_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -98,7 +106,11 @@ set(FBS_INCLUDE_PREFIX "${MOTION_ROOT_DIR}/src/motioncore/communication/fbs_head
 find_package(Flatbuffers QUIET)
 if (Flatbuffers_FOUND)
     message(STATUS "Found flatbuffers")
-    set(FLATBUFFERS_FLATC_EXECUTABLE "flatc")
+    if (WIN32)
+        set(FLATBUFFERS_FLATC_EXECUTABLE "flatc.exe")
+    else()
+        set(FLATBUFFERS_FLATC_EXECUTABLE "flatc")
+    endif()
 elseif (NOT Flatbuffers_FOUND AND NOT TARGET flatbuffers::flatbuffers)
     message("flatbuffers was not found: add flatbuffers subdirectory")
     if (NOT EXISTS "${PROJECT_SOURCE_DIR}/extern/flatbuffers/CMakeLists.txt")
@@ -113,7 +125,11 @@ elseif (NOT Flatbuffers_FOUND AND NOT TARGET flatbuffers::flatbuffers)
     set(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL "Disable building flatbuffers tests" FORCE)
     add_subdirectory(${PROJECT_SOURCE_DIR}/extern/flatbuffers
             ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers-build)
-    set(FLATBUFFERS_FLATC_EXECUTABLE "${PROJECT_BINARY_DIR}/bin/flatc")
+    if (WIN32)
+        set(FLATBUFFERS_FLATC_EXECUTABLE "${PROJECT_BINARY_DIR}/bin/flatc.exe")
+    else()
+        set(FLATBUFFERS_FLATC_EXECUTABLE "${PROJECT_BINARY_DIR}/bin/flatc")
+    endif()
 endif ()
 add_subdirectory(fbs)
 
@@ -136,6 +152,24 @@ if (MOTION_BUILD_TESTS)
         add_subdirectory(src/test)
     endif ()
 endif (MOTION_BUILD_TESTS)
+
+if (MOTION_BUILD_BENCHMARKS)
+    find_package(benchmark QUIET)
+    if (benchmark_Found)
+        message(STATUS "Found benchmark")
+    elseif (NOT benchmark_Found AND NOT TARGET benchmark::benchmark AND NOT TARGET benchmark::benchmark_main)
+        if (NOT EXISTS "${PROJECT_SOURCE_DIR}/extern/benchmark/CMakeLists.txt")
+            find_package(Git REQUIRED)
+            message("initialize Git submodule: extern/benchmark")
+            execute_process(COMMAND git submodule update --init extern/benchmark
+                    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+        endif ()
+        set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Don't build tests for the benchmark library")
+        set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "Don't install the benchmark library")
+        add_subdirectory(extern/benchmark EXCLUDE_FROM_ALL)
+    endif ()
+    add_subdirectory(src/benchmark)
+endif (MOTION_BUILD_BENCHMARKS)
 
 if (MOTION_BUILD_EXE)
     add_subdirectory(${PROJECT_SOURCE_DIR}/extern/pybind11)

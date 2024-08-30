@@ -26,10 +26,21 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <span>
 #include <vector>
+
+// Undefine Windows macros that collide with function names in MOTION.
+#ifdef SendMessage
+#undef SendMessage
+#endif
+
+#ifdef GetMessage
+#undef GetMessage
+#endif
 
 #include "fbs_headers/message_generated.h"
 #include "transport.h"
+#include "utility/reusable_future.h"
 
 namespace encrypto::motion {
 
@@ -39,7 +50,7 @@ class Logger;
 
 namespace encrypto::motion::communication {
 
-class MessageHandler;
+class MessageManager;
 struct TransportStatistics;
 
 // Central interface for all communication related functionality
@@ -53,6 +64,9 @@ class CommunicationLayer {
                      std::shared_ptr<Logger> logger);
   ~CommunicationLayer();
 
+  CommunicationLayer() = delete;
+  CommunicationLayer(const CommunicationLayer&) = delete;
+
   std::size_t GetNumberOfParties() const { return number_of_parties_; }
   std::size_t GetMyId() const { return my_id_; }
 
@@ -61,39 +75,21 @@ class CommunicationLayer {
   void Synchronize();
 
   // Send a message to a specified party
-  void SendMessage(std::size_t party_id, std::vector<std::uint8_t>&& message);
-  void SendMessage(std::size_t party_id, const std::vector<std::uint8_t>& message);
-  void SendMessage(std::size_t party_id, std::shared_ptr<const std::vector<std::uint8_t>> message);
-  void SendMessage(std::size_t party_id, flatbuffers::FlatBufferBuilder&& message_builder);
+  void SendMessage(std::size_t party_id, flatbuffers::DetachedBuffer&& message);
 
   // Send a message to all other parties
-  void BroadcastMessage(std::vector<std::uint8_t>&& message);
-  void BroadcastMessage(const std::vector<std::uint8_t>& message);
-  void BroadcastMessage(std::shared_ptr<const std::vector<std::uint8_t>> message);
-  void BroadcastMessage(flatbuffers::FlatBufferBuilder&& message_builder);
-
-  // Factory function for creating message handlers
-  using MessageHandlerFunction =
-      std::function<std::shared_ptr<MessageHandler>(std::size_t party_id)>;
-  // Register message handlers for given types
-  void RegisterMessageHandler(MessageHandlerFunction,
-                              const std::vector<MessageType>& message_types);
-  // Deregister any message handler registered for the given types
-  void DeregisterMessageHandler(const std::vector<MessageType>& message_types);
-  // Return the message handler registered for the given type.
-  // Throws if no handler was registered for this type.
-  MessageHandler& GetMessageHandler(std::size_t party_id, MessageType type);
-
-  // Register handler to be called if no matchin handler is installed.
-  void RegisterFallbackMessageHandler(MessageHandlerFunction);
-  MessageHandler& GetFallbackMessageHandler(std::size_t party_id);
+  void BroadcastMessage(flatbuffers::DetachedBuffer&& message);
 
   // shutdown the communication layer
   void Shutdown();
 
   std::vector<TransportStatistics> GetTransportStatistics() const noexcept;
 
+  auto GetLogger() { return logger_; }
+
   void SetLogger(std::shared_ptr<Logger> logger);
+
+  MessageManager& GetMessageManager() { return *message_manager_; }
 
  private:
   struct CommunicationLayerImplementation;
@@ -104,6 +100,9 @@ class CommunicationLayer {
   bool is_started_;
   bool is_shutdown_;
   std::shared_ptr<Logger> logger_;
+  std::shared_ptr<MessageManager> message_manager_;
+
+  std::size_t sync_state_{0};
 };
 
 // Create a set of communication layers connected by dummy transports

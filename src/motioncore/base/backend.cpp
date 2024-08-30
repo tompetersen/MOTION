@@ -1,6 +1,6 @@
 // MIT License
 //
-// Copyright (c) 2019 Oleksandr Tkachenko, Lennart Braun
+// Copyright (c) 2019-2022 Oleksandr Tkachenko, Lennart Braun, Arianne Roselina Prananto
 // Cryptography and Privacy Engineering Group (ENCRYPTO)
 // TU Darmstadt, Germany
 //
@@ -22,6 +22,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+#include <boost/asio/thread_pool.hpp>
+
 #include "backend.h"
 #include "motion_base_provider.h"
 
@@ -30,9 +32,9 @@
 #include <functional>
 #include <future>
 #include <iterator>
+#include <span>
 
 #include <fmt/format.h>
-#include <boost/asio/thread_pool.hpp>
 
 #include "communication/communication_layer.h"
 #include "communication/message.h"
@@ -42,13 +44,21 @@
 #include "multiplication_triple/mt_provider.h"
 #include "multiplication_triple/sb_provider.h"
 #include "multiplication_triple/sp_provider.h"
+#include "oblivious_transfer/1_out_of_n/kk13_ot_provider.h"
 #include "oblivious_transfer/base_ots/base_ot_provider.h"
 #include "oblivious_transfer/ot_provider.h"
+#include "protocols/arithmetic_gmw/arithmetic_gmw_share.h"
+#include "protocols/astra/astra_gate.h"
+#include "protocols/astra/astra_share.h"
 #include "protocols/bmr/bmr_gate.h"
 #include "protocols/bmr/bmr_provider.h"
 #include "protocols/bmr/bmr_share.h"
 #include "protocols/boolean_gmw/boolean_gmw_gate.h"
 #include "protocols/boolean_gmw/boolean_gmw_share.h"
+#include "protocols/constant/constant_share.h"
+#include "protocols/garbled_circuit/garbled_circuit_gate.h"
+#include "protocols/garbled_circuit/garbled_circuit_provider.h"
+#include "protocols/garbled_circuit/garbled_circuit_share.h"
 #include "register.h"
 #include "statistics/run_time_statistics.h"
 #include "utility/constants.h"
@@ -57,63 +67,45 @@ using namespace std::chrono_literals;
 
 namespace encrypto::motion {
 
-Backend::Backend(communication::CommunicationLayer& communication_layer,
-                 ConfigurationPointer& configuration, std::shared_ptr<Logger> logger)
+Backend::Backend(std::unique_ptr<communication::CommunicationLayer> communication_layer,
+                 ConfigurationPointer configuration, std::shared_ptr<Logger> logger)
     : run_time_statistics_(1),
-      communication_layer_(communication_layer),
+      communication_layer_(std::move(communication_layer)),
       logger_(logger),
       configuration_(configuration),
       register_(std::make_shared<Register>(logger_)),
       gate_executor_(std::make_unique<GateExecutor>(
           *register_, [this] { RunPreprocessing(); }, logger_)) {
-  motion_base_provider_ = std::make_unique<BaseProvider>(communication_layer_, logger_);
-  base_ot_provider_ = std::make_unique<BaseOtProvider>(communication_layer, logger_);
-
-  communication_layer_.SetLogger(logger_);
-  auto my_id = communication_layer_.GetMyId();
+  motion_base_provider_ = std::make_unique<BaseProvider>(*communication_layer_);
+  base_ot_provider_ = std::make_unique<BaseOtProvider>(*communication_layer_);
+  communication_layer_->SetLogger(logger_);
+  auto my_id = communication_layer_->GetMyId();
 
   ot_provider_manager_ = std::make_unique<OtProviderManager>(
-      communication_layer_, *base_ot_provider_, *motion_base_provider_, logger_);
+      *communication_layer_, *base_ot_provider_, *motion_base_provider_);
+
+  kk13_ot_provider_manager_ = std::make_unique<Kk13OtProviderManager>(
+      *communication_layer_, *base_ot_provider_, *motion_base_provider_);
 
   mt_provider_ = std::make_shared<MtProviderFromOts>(ot_provider_manager_->GetProviders(), my_id,
-                                                     *logger_, run_time_statistics_.back());
+                                                     logger, run_time_statistics_.back());
   sp_provider_ = std::make_shared<SpProviderFromOts>(ot_provider_manager_->GetProviders(), my_id,
-                                                     *logger_, run_time_statistics_.back());
-  sb_provider_ = std::make_shared<SbProviderFromSps>(communication_layer_, sp_provider_, *logger_,
+                                                     logger, run_time_statistics_.back());
+  sb_provider_ = std::make_shared<SbProviderFromSps>(*communication_layer_, sp_provider_, logger,
                                                      run_time_statistics_.back());
-  bmr_provider_ = std::make_unique<proto::bmr::Provider>(communication_layer_);
-  communication_layer_.Start();
+  bmr_provider_ = std::make_unique<proto::bmr::Provider>(*communication_layer_);
+  if (communication_layer_->GetNumberOfParties() == 2) {
+    garbled_circuit_provider_ =
+        proto::garbled_circuit::Provider::MakeProvider(*communication_layer_);
+  }
+
+  // TODO should probably throw if it has been already started
+  communication_layer_->Start();
 }
 
-Backend::~Backend() = default;
+Backend::~Backend() {}
 
 const LoggerPointer& Backend::GetLogger() const noexcept { return logger_; }
-
-std::size_t Backend::NextGateId() const { return register_->NextGateId(); }
-
-// TODO: remove this method
-void Backend::Send(std::size_t party_id, flatbuffers::FlatBufferBuilder&& message) {
-  communication_layer_.SendMessage(party_id, std::move(message));
-}
-
-void Backend::RegisterInputGate(const InputGatePointer& input_gate) {
-  auto gate = std::static_pointer_cast<Gate>(input_gate);
-  register_->RegisterNextInputGate(gate);
-}
-
-void Backend::RegisterGate(const GatePointer& gate) { register_->RegisterNextGate(gate); }
-
-// TODO: move this to OtProvider(Wrapper)
-bool Backend::NeedOts() {
-  auto& ot_providers = ot_provider_manager_->GetProviders();
-  for (auto party_id = 0ull; party_id < communication_layer_.GetNumberOfParties(); ++party_id) {
-    if (party_id == communication_layer_.GetMyId()) continue;
-    if (ot_providers.at(party_id)->GetNumOtsReceiver() > 0 ||
-        ot_providers.at(party_id)->GetNumOtsSender() > 0)
-      return true;
-  }
-  return false;
-}
 
 void Backend::RunPreprocessing() {
   logger_->LogInfo("Start preprocessing");
@@ -122,32 +114,61 @@ void Backend::RunPreprocessing() {
   // TODO: should this be measured?
   motion_base_provider_->Setup();
 
+  // TODO: design and implement a dependency manager that automatically arranges and runs
+  // components depending on their dependencies
   // SB needs SP
   // SP needs OT
   // MT needs OT
 
-  const bool needs_mts = GetMtProvider()->NeedMts();
+  const bool needs_mts = mt_provider_->NeedMts();
   if (needs_mts) {
     mt_provider_->PreSetup();
   }
-  const bool needs_sbs = GetSbProvider()->NeedSbs();
+  const bool needs_sbs = sb_provider_->NeedSbs();
   if (needs_sbs) {
     sb_provider_->PreSetup();
   }
-  const bool needs_sps = GetSpProvider()->NeedSps();
+  const bool needs_sps = sp_provider_->NeedSps();
   if (needs_sps) {
     sp_provider_->PreSetup();
   }
 
-  if (NeedOts()) {
+  if (kk13_ot_provider_manager_->HasWork()) {
+    kk13_ot_provider_manager_->PreSetup();
+  }
+
+  if (ot_provider_manager_->HasWork()) {
+    ot_provider_manager_->PreSetup();
+  }
+
+  if (base_ot_provider_->HasWork()) {
+    base_ot_provider_->PreSetup();
+  }
+
+  communication_layer_->Synchronize();
+
+  if (base_ot_provider_->HasWork()) {
+    base_ot_provider_->ComputeBaseOts();
+  }
+
+  if (ot_provider_manager_->HasWork() || kk13_ot_provider_manager_->HasWork()) {
     OtExtensionSetup();
   }
 
-  std::array<std::future<void>, 3> futures;
-  futures.at(0) = std::async(std::launch::async, [this] { mt_provider_->Setup(); });
-  futures.at(1) = std::async(std::launch::async, [this] { sp_provider_->Setup(); });
-  futures.at(2) = std::async(std::launch::async, [this] { sb_provider_->Setup(); });
-  std::for_each(futures.begin(), futures.end(), [](auto& f) { f.get(); });
+  std::vector<std::future<void>> futures;
+  futures.reserve(4);
+  futures.emplace_back(std::async(std::launch::async, [this] { mt_provider_->Setup(); }));
+  futures.emplace_back(std::async(std::launch::async, [this] { sp_provider_->Setup(); }));
+  futures.emplace_back(std::async(std::launch::async, [this] { sb_provider_->Setup(); }));
+  if (garbled_circuit_provider_ && garbled_circuit_provider_->HasWork()) {
+    futures.emplace_back(
+        std::async(std::launch::async, [this] { garbled_circuit_provider_->Setup(); }));
+  }
+
+  for (auto& f : futures) {
+    assert(f.valid());
+    f.get();
+  }
 
   run_time_statistics_.back().RecordEnd<RunTimeStatistics::StatisticsId::kPreprocessing>();
 }
@@ -160,10 +181,6 @@ void Backend::EvaluateParallel() { gate_executor_->Evaluate(run_time_statistics_
 
 const GatePointer& Backend::GetGate(std::size_t gate_id) const {
   return register_->GetGate(gate_id);
-}
-
-const std::vector<GatePointer>& Backend::GetInputGates() const {
-  return register_->GetInputGates();
 }
 
 void Backend::Reset() { register_->Reset(); }
@@ -182,89 +199,22 @@ SharePointer Backend::BooleanGmwInput(std::size_t party_id, BitVector<>&& input)
   return BooleanGmwInput(party_id, std::vector<BitVector<>>{std::move(input)});
 }
 
-SharePointer Backend::BooleanGmwInput(std::size_t party_id, const std::vector<BitVector<>>& input) {
-  const auto input_gate = std::make_shared<proto::boolean_gmw::InputGate>(input, party_id, *this);
-  const auto input_gate_cast = std::static_pointer_cast<InputGate>(input_gate);
-  RegisterInputGate(input_gate_cast);
+SharePointer Backend::BooleanGmwInput(std::size_t party_id, std::span<const BitVector<>> input) {
+  const auto input_gate =
+      register_->EmplaceGate<proto::boolean_gmw::InputGate>(input, party_id, *this);
   return std::static_pointer_cast<Share>(input_gate->GetOutputAsGmwShare());
 }
 
 SharePointer Backend::BooleanGmwInput(std::size_t party_id, std::vector<BitVector<>>&& input) {
   const auto input_gate =
-      std::make_shared<proto::boolean_gmw::InputGate>(std::move(input), party_id, *this);
-  const auto input_gate_cast = std::static_pointer_cast<InputGate>(input_gate);
-  RegisterInputGate(input_gate_cast);
+      register_->EmplaceGate<proto::boolean_gmw::InputGate>(input, party_id, *this);
   return std::static_pointer_cast<Share>(input_gate->GetOutputAsGmwShare());
-}
-
-SharePointer Backend::BooleanGmwXor(const proto::boolean_gmw::SharePointer& a,
-                                    const proto::boolean_gmw::SharePointer& b) {
-  assert(a);
-  assert(b);
-  const auto xor_gate = std::make_shared<proto::boolean_gmw::XorGate>(a, b);
-  RegisterGate(xor_gate);
-  return xor_gate->GetOutputAsShare();
-}
-
-SharePointer Backend::BooleanGmwXor(const SharePointer& a, const SharePointer& b) {
-  assert(a);
-  assert(b);
-  const auto casted_a = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(a);
-  const auto casted_b = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(b);
-  assert(casted_a);
-  assert(casted_b);
-  return BooleanGmwXor(casted_a, casted_b);
-}
-
-SharePointer Backend::BooleanGmwAnd(const proto::boolean_gmw::SharePointer& a,
-                                    const proto::boolean_gmw::SharePointer& b) {
-  assert(a);
-  assert(b);
-  const auto and_gate = std::make_shared<proto::boolean_gmw::AndGate>(a, b);
-  RegisterGate(and_gate);
-  return and_gate->GetOutputAsShare();
-}
-
-SharePointer Backend::BooleanGmwAnd(const SharePointer& a, const SharePointer& b) {
-  assert(a);
-  assert(b);
-  const auto casted_a = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(a);
-  const auto casted_b = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(b);
-  assert(casted_a);
-  assert(casted_b);
-  return BooleanGmwAnd(casted_a, casted_b);
-}
-
-SharePointer Backend::BooleanGmwMux(const proto::boolean_gmw::SharePointer& a,
-                                    const proto::boolean_gmw::SharePointer& b,
-                                    const proto::boolean_gmw::SharePointer& selection) {
-  assert(a);
-  assert(b);
-  assert(selection);
-  const auto mux_gate = std::make_shared<proto::boolean_gmw::MuxGate>(a, b, selection);
-  RegisterGate(mux_gate);
-  return mux_gate->GetOutputAsShare();
-}
-
-SharePointer Backend::BooleanGmwMux(const SharePointer& a, const SharePointer& b,
-                                    const SharePointer& selection) {
-  assert(a);
-  assert(b);
-  assert(selection);
-  const auto casted_a = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(a);
-  const auto casted_b = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(b);
-  const auto casted_selection = std::dynamic_pointer_cast<proto::boolean_gmw::Share>(selection);
-  assert(casted_a);
-  assert(casted_b);
-  assert(casted_selection);
-  return BooleanGmwMux(casted_a, casted_b, casted_selection);
 }
 
 SharePointer Backend::BooleanGmwOutput(const SharePointer& parent, std::size_t output_owner) {
   assert(parent);
-  const auto output_gate = std::make_shared<proto::boolean_gmw::OutputGate>(parent, output_owner);
-  const auto ouput_gate_cast = std::static_pointer_cast<Gate>(output_gate);
-  RegisterGate(ouput_gate_cast);
+  const auto output_gate =
+      register_->EmplaceGate<proto::boolean_gmw::OutputGate>(parent, output_owner);
   return std::static_pointer_cast<Share>(output_gate->GetOutputAsShare());
 }
 
@@ -280,65 +230,226 @@ SharePointer Backend::BmrInput(std::size_t party_id, BitVector<>&& input) {
   return BmrInput(party_id, std::vector<BitVector<>>{std::move(input)});
 }
 
-SharePointer Backend::BmrInput(std::size_t party_id, const std::vector<BitVector<>>& input) {
-  const auto input_gate = std::make_shared<proto::bmr::InputGate>(input, party_id, *this);
-  const auto input_gate_cast = std::static_pointer_cast<InputGate>(input_gate);
-  RegisterInputGate(input_gate_cast);
+SharePointer Backend::BmrInput(std::size_t party_id, std::span<const BitVector<>> input) {
+  const auto input_gate = register_->EmplaceGate<proto::bmr::InputGate>(input, party_id, *this);
   return std::static_pointer_cast<Share>(input_gate->GetOutputAsBmrShare());
 }
 
 SharePointer Backend::BmrInput(std::size_t party_id, std::vector<BitVector<>>&& input) {
-  const auto input_gate =
-      std::make_shared<proto::bmr::InputGate>(std::move(input), party_id, *this);
-  const auto input_gate_cast = std::static_pointer_cast<InputGate>(input_gate);
-  RegisterInputGate(input_gate_cast);
+  const auto input_gate = register_->EmplaceGate<proto::bmr::InputGate>(input, party_id, *this);
   return std::static_pointer_cast<Share>(input_gate->GetOutputAsBmrShare());
 }
 
 SharePointer Backend::BmrOutput(const SharePointer& parent, std::size_t output_owner) {
   assert(parent);
-  const auto output_gate = std::make_shared<proto::bmr::OutputGate>(parent, output_owner);
-  const auto ouput_gate_cast = std::static_pointer_cast<Gate>(output_gate);
-  RegisterGate(ouput_gate_cast);
+  const auto output_gate = register_->EmplaceGate<proto::bmr::OutputGate>(parent, output_owner);
   return std::static_pointer_cast<Share>(output_gate->GetOutputAsShare());
 }
 
-void Backend::Synchronize() { communication_layer_.Synchronize(); }
+template <typename T>
+SharePointer Backend::ArithmeticGmwInput(std::size_t party_id, T input) {
+  std::vector<T> input_vector{input};
+  return ArithmeticGmwInput(party_id, std::move(input_vector));
+}
+
+template SharePointer Backend::ArithmeticGmwInput<std::uint8_t>(std::size_t party_id,
+                                                                std::uint8_t input);
+template SharePointer Backend::ArithmeticGmwInput<std::uint16_t>(std::size_t party_id,
+                                                                 std::uint16_t input);
+template SharePointer Backend::ArithmeticGmwInput<std::uint32_t>(std::size_t party_id,
+                                                                 std::uint32_t input);
+template SharePointer Backend::ArithmeticGmwInput<std::uint64_t>(std::size_t party_id,
+                                                                 std::uint64_t input);
+template SharePointer Backend::ArithmeticGmwInput<__uint128_t>(std::size_t party_id,
+                                                               __uint128_t input);
+
+template <typename T>
+SharePointer Backend::ArithmeticGmwInput(std::size_t party_id, const std::vector<T>& input_vector) {
+  auto input_gate =
+      register_->EmplaceGate<proto::arithmetic_gmw::InputGate<T>>(input_vector, party_id, *this);
+  return std::static_pointer_cast<Share>(input_gate->GetOutputAsArithmeticShare());
+}
+
+template SharePointer Backend::ArithmeticGmwInput<std::uint8_t>(
+    std::size_t party_id, const std::vector<std::uint8_t>& input);
+template SharePointer Backend::ArithmeticGmwInput<std::uint16_t>(
+    std::size_t party_id, const std::vector<std::uint16_t>& input);
+template SharePointer Backend::ArithmeticGmwInput<std::uint32_t>(
+    std::size_t party_id, const std::vector<std::uint32_t>& input);
+template SharePointer Backend::ArithmeticGmwInput<std::uint64_t>(
+    std::size_t party_id, const std::vector<std::uint64_t>& input);
+template SharePointer Backend::ArithmeticGmwInput<__uint128_t>(
+    std::size_t party_id, const std::vector<__uint128_t>& input);
+
+template <typename T>
+SharePointer Backend::ArithmeticGmwInput(std::size_t party_id, std::vector<T>&& input_vector) {
+  auto input_gate =
+      register_->EmplaceGate<proto::arithmetic_gmw::InputGate<T>>(input_vector, party_id, *this);
+  return std::static_pointer_cast<Share>(input_gate->GetOutputAsArithmeticShare());
+}
+
+template SharePointer Backend::ArithmeticGmwInput<std::uint8_t>(std::size_t party_id,
+                                                                std::vector<std::uint8_t>&& input);
+template SharePointer Backend::ArithmeticGmwInput<std::uint16_t>(
+    std::size_t party_id, std::vector<std::uint16_t>&& input);
+template SharePointer Backend::ArithmeticGmwInput<std::uint32_t>(
+    std::size_t party_id, std::vector<std::uint32_t>&& input);
+template SharePointer Backend::ArithmeticGmwInput<std::uint64_t>(
+    std::size_t party_id, std::vector<std::uint64_t>&& input);
+template SharePointer Backend::ArithmeticGmwInput<__uint128_t>(std::size_t party_id,
+                                                               std::vector<__uint128_t>&& input);
+
+template <typename T>
+SharePointer Backend::ArithmeticGmwOutput(const proto::arithmetic_gmw::SharePointer<T>& parent,
+                                          std::size_t output_owner) {
+  assert(parent);
+  auto output_gate =
+      register_->EmplaceGate<proto::arithmetic_gmw::OutputGate<T>>(parent, output_owner);
+  return std::static_pointer_cast<Share>(output_gate->GetOutputAsArithmeticShare());
+}
+
+template SharePointer Backend::ArithmeticGmwOutput<std::uint8_t>(
+    const proto::arithmetic_gmw::SharePointer<std::uint8_t>& parent, std::size_t output_owner);
+template SharePointer Backend::ArithmeticGmwOutput<std::uint16_t>(
+    const proto::arithmetic_gmw::SharePointer<std::uint16_t>& parent, std::size_t output_owner);
+template SharePointer Backend::ArithmeticGmwOutput<std::uint32_t>(
+    const proto::arithmetic_gmw::SharePointer<std::uint32_t>& parent, std::size_t output_owner);
+template SharePointer Backend::ArithmeticGmwOutput<std::uint64_t>(
+    const proto::arithmetic_gmw::SharePointer<std::uint64_t>& parent, std::size_t output_owner);
+template SharePointer Backend::ArithmeticGmwOutput<__uint128_t>(
+    const proto::arithmetic_gmw::SharePointer<__uint128_t>& parent, std::size_t output_owner);
+
+template <typename T>
+SharePointer Backend::ArithmeticGmwOutput(const SharePointer& parent, std::size_t output_owner) {
+  assert(parent);
+  auto casted_parent_pointer = std::dynamic_pointer_cast<proto::arithmetic_gmw::Share<T>>(parent);
+  assert(casted_parent_pointer);
+  return ArithmeticGmwOutput(casted_parent_pointer, output_owner);
+}
+
+template SharePointer Backend::ArithmeticGmwOutput<std::uint8_t>(const SharePointer& parent,
+                                                                 std::size_t output_owner);
+template SharePointer Backend::ArithmeticGmwOutput<std::uint16_t>(const SharePointer& parent,
+                                                                  std::size_t output_owner);
+template SharePointer Backend::ArithmeticGmwOutput<std::uint32_t>(const SharePointer& parent,
+                                                                  std::size_t output_owner);
+template SharePointer Backend::ArithmeticGmwOutput<std::uint64_t>(const SharePointer& parent,
+                                                                  std::size_t output_owner);
+template SharePointer Backend::ArithmeticGmwOutput<__uint128_t>(const SharePointer& parent,
+                                                                std::size_t output_owner);
+
+template <typename T>
+SharePointer Backend::AstraInput(std::size_t party_id, T input) {
+  return AstraInput(party_id, std::vector<T>(input));
+}
+
+template SharePointer Backend::AstraInput<std::uint8_t>(std::size_t party_id, std::uint8_t input);
+template SharePointer Backend::AstraInput<std::uint16_t>(std::size_t party_id, std::uint16_t input);
+template SharePointer Backend::AstraInput<std::uint32_t>(std::size_t party_id, std::uint32_t input);
+template SharePointer Backend::AstraInput<std::uint64_t>(std::size_t party_id, std::uint64_t input);
+template SharePointer Backend::AstraInput<__uint128_t>(std::size_t party_id, __uint128_t input);
+
+template <typename T>
+SharePointer Backend::AstraInput(std::size_t party_id, std::vector<T> input) {
+  auto input_gate =
+      register_->EmplaceGate<proto::astra::InputGate<T>>(std::move(input), party_id, *this);
+  return std::static_pointer_cast<Share>(input_gate->GetOutputAsAstraShare());
+}
+
+template SharePointer Backend::AstraInput<std::uint8_t>(std::size_t party_id,
+                                                        std::vector<std::uint8_t> input);
+template SharePointer Backend::AstraInput<std::uint16_t>(std::size_t party_id,
+                                                         std::vector<std::uint16_t> input);
+template SharePointer Backend::AstraInput<std::uint32_t>(std::size_t party_id,
+                                                         std::vector<std::uint32_t> input);
+template SharePointer Backend::AstraInput<std::uint64_t>(std::size_t party_id,
+                                                         std::vector<std::uint64_t> input);
+template SharePointer Backend::AstraInput<__uint128_t>(std::size_t party_id,
+                                                       std::vector<__uint128_t> input);
+
+template <typename T>
+SharePointer Backend::AstraOutput(const proto::astra::SharePointer<T>& parent,
+                                  std::size_t output_owner) {
+  assert(parent);
+  auto output_gate = register_->EmplaceGate<proto::astra::OutputGate<T>>(parent, output_owner);
+  return std::static_pointer_cast<Share>(output_gate->GetOutputAsAstraShare());
+}
+
+template SharePointer Backend::AstraOutput<std::uint8_t>(
+    const proto::astra::SharePointer<std::uint8_t>& parent, std::size_t output_owner);
+template SharePointer Backend::AstraOutput<std::uint16_t>(
+    const proto::astra::SharePointer<std::uint16_t>& parent, std::size_t output_owner);
+template SharePointer Backend::AstraOutput<std::uint32_t>(
+    const proto::astra::SharePointer<std::uint32_t>& parent, std::size_t output_owner);
+template SharePointer Backend::AstraOutput<std::uint64_t>(
+    const proto::astra::SharePointer<std::uint64_t>& parent, std::size_t output_owner);
+template SharePointer Backend::AstraOutput<__uint128_t>(
+    const proto::astra::SharePointer<__uint128_t>& parent, std::size_t output_owner);
+
+template <typename T>
+SharePointer Backend::AstraOutput(const SharePointer& parent, std::size_t output_owner) {
+  assert(parent);
+  auto casted_parent_pointer = std::dynamic_pointer_cast<proto::astra::Share<T>>(parent);
+  assert(casted_parent_pointer);
+  return AstraOutput<T>(casted_parent_pointer, output_owner);
+}
+
+template SharePointer Backend::AstraOutput<std::uint8_t>(const SharePointer& parent,
+                                                         std::size_t output_owner);
+template SharePointer Backend::AstraOutput<std::uint16_t>(const SharePointer& parent,
+                                                          std::size_t output_owner);
+template SharePointer Backend::AstraOutput<std::uint32_t>(const SharePointer& parent,
+                                                          std::size_t output_owner);
+template SharePointer Backend::AstraOutput<std::uint64_t>(const SharePointer& parent,
+                                                          std::size_t output_owner);
+template SharePointer Backend::AstraOutput<__uint128_t>(const SharePointer& parent,
+                                                        std::size_t output_owner);
+
+SharePointer Backend::GarbledCircuitInput(std::size_t party_id,
+                                          std::span<const BitVector<>> input) {
+  bool is_garbler =
+      communication_layer_->GetMyId() == static_cast<std::size_t>(GarbledCircuitRole::kGarbler);
+  namespace gc = proto::garbled_circuit;
+  auto scast{[](auto p) { return static_pointer_cast<gc::InputGate>(p); }};
+  auto input_gate =
+      is_garbler
+          ? scast(GetRegister()->EmplaceGate<gc::InputGateGarbler>(input, party_id, *this))
+          : scast(GetRegister()->EmplaceGate<gc::InputGateEvaluator>(input, party_id, *this));
+  return std::static_pointer_cast<Share>(input_gate->GetOutputAsGarbledCircuitShare());
+}
+
+SharePointer Backend::GarbledCircuitInput(std::size_t party_id, std::vector<BitVector<>>&& input) {
+  return GarbledCircuitInput(party_id, std::span(input));
+}
+
+std::pair<SharePointer, ReusableFiberPromise<std::vector<BitVector<>>>*>
+Backend::GarbledCircuitInput(std::size_t input_owner_id, std::size_t number_of_wires,
+                             std::size_t number_of_simd) {
+  auto input_gate = GetGarbledCircuitProvider().MakeInputGate(input_owner_id, number_of_wires,
+                                                              number_of_simd, *this);
+  bool my_input{input_owner_id == GetCommunicationLayer().GetMyId()};
+  auto input_promise_ptr = my_input ? &input_gate->GetInputPromise() : nullptr;
+  return std::pair(std::static_pointer_cast<Share>(input_gate->GetOutputAsGarbledCircuitShare()),
+                   input_promise_ptr);
+}
+
+SharePointer Backend::GarbledCircuitOutput(const SharePointer& parent, std::size_t output_owner) {
+  assert(parent);
+  const auto output_gate =
+      GetRegister()->EmplaceGate<proto::garbled_circuit::OutputGate>(parent, output_owner);
+  return output_gate->GetOutputAsConstantShare();
+}
+
+void Backend::Synchronize() { communication_layer_->Synchronize(); }
 
 void Backend::ComputeBaseOts() {
   run_time_statistics_.back().RecordStart<RunTimeStatistics::StatisticsId::kBaseOts>();
   base_ot_provider_->ComputeBaseOts();
   run_time_statistics_.back().RecordEnd<RunTimeStatistics::StatisticsId::kBaseOts>();
-
-  base_ots_finished_ = true;
 }
 
-void Backend::ImportBaseOts(std::size_t i, const ReceiverMessage& messages) {
-  base_ot_provider_->ImportBaseOts(i, messages);
-}
-
-void Backend::ImportBaseOts(std::size_t i, const SenderMessage& messages) {
-  base_ot_provider_->ImportBaseOts(i, messages);
-}
-
-std::pair<ReceiverMessage, SenderMessage> Backend::ExportBaseOts(std::size_t i) {
-  return base_ot_provider_->ExportBaseOts(i);
-}
-
-// TODO: move to OtProvider(Wrapper)
+// TODO: move to OtProviderManager::Setup()
 void Backend::OtExtensionSetup() {
-  require_base_ots_ = true;
-
-  if (ot_extension_finished_) {
-    return;
-  }
-
-  if (!base_ots_finished_) {
-    ComputeBaseOts();
-  }
-
-  motion_base_provider_->Setup();
-
   if constexpr (kDebug) {
     logger_->LogDebug("Start computing setup for OTExtensions");
   }
@@ -346,20 +457,29 @@ void Backend::OtExtensionSetup() {
   run_time_statistics_.back().RecordStart<RunTimeStatistics::StatisticsId::kOtExtensionSetup>();
 
   std::vector<std::future<void>> task_futures;
-  task_futures.reserve(2 * (communication_layer_.GetNumberOfParties() - 1));
+  task_futures.reserve(2 * (communication_layer_->GetNumberOfParties() - 1));
 
-  for (auto i = 0ull; i < communication_layer_.GetNumberOfParties(); ++i) {
-    if (i == communication_layer_.GetMyId()) {
+  for (auto i = 0ull; i < communication_layer_->GetNumberOfParties(); ++i) {
+    if (i == communication_layer_->GetMyId()) {
       continue;
     }
-    task_futures.emplace_back(std::async(
-        std::launch::async, [this, i] { ot_provider_manager_->GetProvider(i).SendSetup(); }));
-    task_futures.emplace_back(std::async(
-        std::launch::async, [this, i] { ot_provider_manager_->GetProvider(i).ReceiveSetup(); }));
+    if (ot_provider_manager_->GetProvider(i).HasWork()) {
+      task_futures.emplace_back(std::async(
+          std::launch::async, [this, i] { ot_provider_manager_->GetProvider(i).SendSetup(); }));
+      task_futures.emplace_back(std::async(
+          std::launch::async, [this, i] { ot_provider_manager_->GetProvider(i).ReceiveSetup(); }));
+    }
+    if (kk13_ot_provider_manager_->GetProvider(i).HasWork()) {
+      task_futures.emplace_back(std::async(std::launch::async, [this, i] {
+        kk13_ot_provider_manager_->GetProvider(i).SendSetup();
+      }));
+      task_futures.emplace_back(std::async(std::launch::async, [this, i] {
+        kk13_ot_provider_manager_->GetProvider(i).ReceiveSetup();
+      }));
+    }
   }
 
-  std::for_each(task_futures.begin(), task_futures.end(), [](auto& f) { f.get(); });
-  ot_extension_finished_ = true;
+  for (auto& f : task_futures) f.get();
 
   run_time_statistics_.back().RecordEnd<RunTimeStatistics::StatisticsId::kOtExtensionSetup>();
 
@@ -370,6 +490,10 @@ void Backend::OtExtensionSetup() {
 
 OtProvider& Backend::GetOtProvider(std::size_t party_id) {
   return ot_provider_manager_->GetProvider(party_id);
+}
+
+Kk13OtProvider& Backend::GetKk13OtProvider(std::size_t party_id) {
+  return kk13_ot_provider_manager_->GetProvider(party_id);
 }
 
 }  // namespace encrypto::motion

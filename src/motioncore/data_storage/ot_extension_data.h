@@ -30,6 +30,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -37,44 +38,15 @@
 #include "utility/bit_matrix.h"
 #include "utility/bit_vector.h"
 #include "utility/block.h"
-#include "utility/meta.hpp"
-#include "utility/reusable_future.h"
 
 namespace encrypto::motion {
 
 class FiberCondition;
+class Logger;
 
-enum OtExtensionDataType : uint {
-  kReceptionMask = 0,
-  kReceptionCorrection = 1,
-  kSendMessage = 2,
-  kOtExtensionInvalidDataType = 3
-};
-
-enum class OtMessageType {
-  kGenericBoolean,
-  kBit,
-  kBlock128,
-  kUint8,
-  kUint16,
-  kUint32,
-  kUint64,
-  kUint128
-};
-
-struct OtExtensionReceiverData {
-  OtExtensionReceiverData();
+struct OtExtensionReceiverData : public FiberSetupWaitable {
+  OtExtensionReceiverData() = default;
   ~OtExtensionReceiverData() = default;
-
-  [[nodiscard]] ReusableFiberFuture<Block128Vector> RegisterForBlock128SenderMessage(
-      std::size_t ot_id, std::size_t size);
-  [[nodiscard]] ReusableFiberFuture<BitVector<>> RegisterForBitSenderMessage(std::size_t ot_id,
-                                                                             std::size_t size);
-  [[nodiscard]] ReusableFiberFuture<std::vector<BitVector<>>> RegisterForGenericSenderMessage(
-      std::size_t ot_id, std::size_t size, std::size_t bitlength);
-  template <typename T>
-  [[nodiscard]] ReusableFiberFuture<std::vector<T>> RegisterForIntSenderMessage(std::size_t ot_id,
-                                                                                std::size_t size);
 
   // matrix of the OT extension scheme
   // XXX: can't we delete this after setup?
@@ -82,82 +54,28 @@ struct OtExtensionReceiverData {
 
   // if many OTs are received in batches, it is not necessary to store all of the flags
   // for received messages but only for the first OT id in the batch. Thus, use a hash table.
-  std::unordered_set<std::size_t> received_outputs;
   std::vector<BitVector<>> outputs;
-  std::unordered_map<std::size_t, std::unique_ptr<FiberCondition>> output_conditions;
-  std::mutex received_outputs_mutex;
 
   // bit length of every OT
   std::vector<std::size_t> bitlengths;
 
-  // store the message types of new-style OTs
-  std::unordered_map<std::size_t, OtMessageType> message_type;
-
-  // Promises for the sender messages
-  // ot_id -> (vector size, vector promise)
-  std::unordered_map<std::size_t, std::pair<std::size_t, ReusableFiberPromise<BitVector<>>>>
-      message_promises_bit;
-  std::unordered_map<std::size_t, std::pair<std::size_t, ReusableFiberPromise<Block128Vector>>>
-      message_promises_block128;
-
-  // Promises for the generic sender messages
-  // ot_id -> (vector size, length of each bitvector, vector promise)
-  std::unordered_map<std::size_t, std::tuple<std::size_t, std::size_t,
-                                             ReusableFiberPromise<std::vector<BitVector<>>>>>
-      message_promises_generic;
-
-  template <typename T>
-  using PromiseMapType =
-      std::unordered_map<std::size_t, std::pair<std::size_t, ReusableFiberPromise<std::vector<T>>>>;
-  TypeMap<PromiseMapType, std::uint8_t, std::uint16_t, std::uint32_t, std::uint64_t, __uint128_t>
-      message_promises_int;
-
-  // have we already set the choices for this OT batch?
-  std::unordered_set<std::size_t> set_real_choices;
-  std::mutex real_choices_mutex;
-
   // random choices from OT precomputation
   std::unique_ptr<AlignedBitVector> random_choices;
-
-  // how many ots are in each batch?
-  std::unordered_map<std::size_t, std::size_t> number_of_ots_in_batch;
-
-  // flag and condition variable: is setup is done?
-  std::unique_ptr<FiberCondition> setup_finished_condition;
-  std::atomic<bool> setup_finished{false};
 
   // XXX: unused
   std::atomic<std::size_t> consumed_offset{0};
 };
 
-struct OtExtensionSenderData {
-  OtExtensionSenderData();
+struct OtExtensionSenderData : public FiberSetupWaitable {
+  OtExtensionSenderData() = default;
   ~OtExtensionSenderData() = default;
 
   // width of the bit matrix
   std::atomic<std::size_t> bit_size{0};
 
-  /// receiver's mask that are needed to construct matrix @param V
-  std::array<AlignedBitVector, 128> u;
-
-  std::array<ReusablePromise<std::size_t>, 128> u_promises;
-  std::array<ReusableFuture<std::size_t>, 128> u_futures;
-  std::mutex u_mutex;
-  std::size_t number_of_received_us{0};
-  // matrix of the OT extension scheme
+  std::array<ReusableFiberFuture<std::vector<std::uint8_t>>, 128> u_futures;
   // XXX: can't we delete this after setup?
   std::shared_ptr<BitMatrix> V;
-
-  // offset, number_of_ots
-  std::unordered_map<std::size_t, std::size_t> number_of_ots_in_batch;
-
-  // corrections for GOTs, i.e., if random choice bit is not the real choice bit
-  // send 1 to flip the messages before encoding or 0 otherwise for each GOT
-  std::unordered_set<std::size_t> received_correction_offsets;
-  std::unordered_map<std::size_t, std::unique_ptr<FiberCondition>>
-      received_correction_offsets_condition;
-  BitVector<> corrections;
-  mutable std::mutex corrections_mutex;
 
   // random sender outputs
   // XXX: why not aligned?
@@ -166,25 +84,30 @@ struct OtExtensionSenderData {
   // bit length of every OT
   std::vector<std::size_t> bitlengths;
 
-  // flag and condition variable: is setup is done?
-  std::unique_ptr<FiberCondition> setup_finished_condition;
-  std::atomic<bool> setup_finished{false};
-
   // XXX: unused
   std::atomic<std::size_t> consumed_offset{0};
 };
 
 struct OtExtensionData {
-  void MessageReceived(const std::uint8_t* message, std::size_t message_size,
-                       const OtExtensionDataType type, const std::size_t ot_id = 0);
+  OtExtensionData(std::size_t party_id,
+                  std::function<void(flatbuffers::FlatBufferBuilder&&)> send_function,
+                  communication::MessageManager& message_manager, std::shared_ptr<Logger> logger)
+      : party_id(party_id),
+        send_function(send_function),
+        message_manager(message_manager),
+        logger(logger) {}
 
-  OtExtensionReceiverData& GetReceiverData() { return receiver_data; }
-  const OtExtensionReceiverData& GetReceiverData() const { return receiver_data; }
-  OtExtensionSenderData& GetSenderData() { return sender_data; }
-  const OtExtensionSenderData& GetSenderData() const { return sender_data; }
+  // OT objects need the party id to refer to the right future map
+  OtExtensionData() = delete;
 
   OtExtensionReceiverData receiver_data;
   OtExtensionSenderData sender_data;
+
+  std::size_t party_id{std::numeric_limits<std::size_t>::max()};
+  std::size_t base_ot_offset{std::numeric_limits<std::size_t>::max()};
+  std::function<void(flatbuffers::FlatBufferBuilder&&)> send_function;
+  communication::MessageManager& message_manager;
+  std::shared_ptr<Logger> logger;
 };
 
 }  // namespace encrypto::motion

@@ -29,22 +29,20 @@
 namespace encrypto::motion::proto::arithmetic_gmw {
 
 // Allow only unsigned integers for Arithmetic wires.
-template <typename T, typename = std::enable_if_t<std::is_unsigned_v<T>>>
+template <typename T>
 class Wire final : public motion::Wire {
   using Base = motion::Wire;
 
  public:
   using value_type = T;
 
-  Wire(Backend& backend, std::size_t number_of_simd) : Base(backend, number_of_simd) {}
+  Wire(Backend& backend, std::size_t number_of_simd);
 
-  Wire(std::vector<T>&& values, Backend& backend)
-      : Base(backend, values.size()), values_(std::move(values)) {}
+  Wire(std::vector<T>&& values, Backend& backend);
 
-  Wire(const std::vector<T>& values, Backend& backend)
-      : Base(backend, values.size()), values_(values) {}
+  Wire(const std::vector<T>& values, Backend& backend);
 
-  Wire(T t, Backend& backend) : Base(backend, 1), values_({t}) {}
+  Wire(T t, Backend& backend);
 
   ~Wire() final = default;
 
@@ -64,7 +62,7 @@ class Wire final : public motion::Wire {
   std::vector<T> values_;
 };
 
-template <typename T, typename = std::enable_if_t<std::is_unsigned_v<T>>>
+template <typename T>
 using WirePointer = std::shared_ptr<Wire<T>>;
 
 }  // namespace encrypto::motion::proto::arithmetic_gmw

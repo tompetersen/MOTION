@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "utility/bit_vector.h"
+#include "utility/fiber_waitable.h"
 
 namespace encrypto::motion {
 
@@ -36,29 +37,15 @@ class Ot {
   virtual std::vector<std::byte> Receive(size_t) = 0;
 };
 
-class RandomOt {
+class RandomOt : public FiberOnlineWaitable {
  public:
   virtual ~RandomOt() = default;
-
-  /**
-   * Send/receive for a single random OT.
-   */
-  // virtual std::pair<std::vector<std::byte>, std::vector<std::byte>> send() = 0;
-  // virtual std::vector<std::byte> recv(bool) = 0;
 
   /**
    * Send/receive parts of the random OT protocol (batch version).
    */
   virtual std::vector<std::pair<std::vector<std::byte>, std::vector<std::byte>>> Send(size_t) = 0;
   virtual std::vector<std::vector<std::byte>> Receive(const BitVector<>&) = 0;
-  /**
-   * Parallelized version of batch send/receive.
-   * These methods will create a new thread pool.
-   */
-  // virtual std::vector<std::pair<std::vector<std::byte>, std::vector<std::byte>>> parallel_send(
-  //    size_t, size_t number_threads) = 0;
-  // virtual std::vector<std::vector<std::byte>> parallel_recv(const std::vector<bool>&,
-  //                                                          size_t number_threads) = 0;
 };
 
 }  // namespace encrypto::motion

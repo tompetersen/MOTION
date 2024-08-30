@@ -28,6 +28,8 @@
 
 #include "base/party.h"
 #include "multiplication_triple/mt_provider.h"
+#include "oblivious_transfer/base_ots/base_ot_provider.h"
+
 namespace {
 
 constexpr auto kNumberOfPartiesList = {2u, 3u};
@@ -42,19 +44,24 @@ TEST(MultiplicationTriples, Binary) {
 
         for (auto& party : motion_parties) {
           party->GetLogger()->SetEnabled(kDetailedLoggingEnabled);
-          party->GetBackend()->GetMtProvider()->RequestBinaryMts(kNumberOfMts);
+          party->GetBackend()->GetMtProvider().RequestBinaryMts(kNumberOfMts);
         }
 
         std::vector<std::future<void>> futures;
         futures.reserve(number_of_parties);
-        for (auto& party : motion_parties) {
-          futures.emplace_back(std::async(std::launch::async, [&party] {
-            auto& backend = party->GetBackend();
+        for (std::size_t j = 0; j < number_of_parties; ++j) {
+          futures.emplace_back(std::async(std::launch::async, [&motion_parties, j] {
+            auto& backend = motion_parties.at(j)->GetBackend();
+            backend->GetBaseProvider().Setup();
             auto& mt_provider = backend->GetMtProvider();
-            mt_provider->PreSetup();
+            mt_provider.PreSetup();
+            backend->GetOtProviderManager().PreSetup();
+            backend->GetBaseOtProvider().PreSetup();
+            backend->Synchronize();
+            backend->GetBaseOtProvider().ComputeBaseOts();
             backend->OtExtensionSetup();
-            mt_provider->Setup();
-            party->Finish();
+            mt_provider.Setup();
+            motion_parties.at(j)->Finish();
           }));
         }
 
@@ -62,14 +69,14 @@ TEST(MultiplicationTriples, Binary) {
 
         // check multiplication triples
         encrypto::motion::BitVector<> a, b, c;
-        a = motion_parties.at(0)->GetBackend()->GetMtProvider()->GetBinaryAll().a;
-        b = motion_parties.at(0)->GetBackend()->GetMtProvider()->GetBinaryAll().b;
-        c = motion_parties.at(0)->GetBackend()->GetMtProvider()->GetBinaryAll().c;
+        a = motion_parties.at(0)->GetBackend()->GetMtProvider().GetBinaryAll().a;
+        b = motion_parties.at(0)->GetBackend()->GetMtProvider().GetBinaryAll().b;
+        c = motion_parties.at(0)->GetBackend()->GetMtProvider().GetBinaryAll().c;
 
         for (auto j = 1ull; j < motion_parties.size(); ++j) {
-          a ^= motion_parties.at(j)->GetBackend()->GetMtProvider()->GetBinaryAll().a;
-          b ^= motion_parties.at(j)->GetBackend()->GetMtProvider()->GetBinaryAll().b;
-          c ^= motion_parties.at(j)->GetBackend()->GetMtProvider()->GetBinaryAll().c;
+          a ^= motion_parties.at(j)->GetBackend()->GetMtProvider().GetBinaryAll().a;
+          b ^= motion_parties.at(j)->GetBackend()->GetMtProvider().GetBinaryAll().b;
+          c ^= motion_parties.at(j)->GetBackend()->GetMtProvider().GetBinaryAll().c;
         }
         EXPECT_EQ(c, a & b);
 
@@ -97,36 +104,41 @@ void TemplateTestInteger() {
             encrypto::motion::MakeLocallyConnectedParties(number_of_parties, kPortOffset);
         for (auto& party : motion_parties) {
           party->GetLogger()->SetEnabled(kDetailedLoggingEnabled);
-          party->GetBackend()->GetMtProvider()->template RequestArithmeticMts<T>(kNumberOfMts);
+          party->GetBackend()->GetMtProvider().template RequestArithmeticMts<T>(kNumberOfMts);
         }
 
         std::vector<std::future<void>> futures;
         futures.reserve(number_of_parties);
-        for (auto& party : motion_parties) {
-          futures.emplace_back(std::async(std::launch::async, [&party] {
-            auto& backend = party->GetBackend();
+        for (std::size_t j = 0; j < number_of_parties; ++j) {
+          futures.emplace_back(std::async(std::launch::async, [&motion_parties, j] {
+            auto& backend = motion_parties.at(j)->GetBackend();
+            backend->GetBaseProvider().Setup();
             auto& mt_provider = backend->GetMtProvider();
-            mt_provider->PreSetup();
+            mt_provider.PreSetup();
+            backend->GetOtProviderManager().PreSetup();
+            backend->GetBaseOtProvider().PreSetup();
+            backend->Synchronize();
+            backend->GetBaseOtProvider().ComputeBaseOts();
             backend->OtExtensionSetup();
-            mt_provider->Setup();
-            party->Finish();
+            mt_provider.Setup();
+            motion_parties.at(j)->Finish();
           }));
         }
         std::for_each(futures.begin(), futures.end(), [](auto& f) { f.get(); });
 
         const auto& mt_provider_0 = motion_parties.at(0)->GetBackend()->GetMtProvider();
-        auto a = mt_provider_0->template GetIntegerAll<T>().a;
-        auto b = mt_provider_0->template GetIntegerAll<T>().b;
-        auto c = mt_provider_0->template GetIntegerAll<T>().c;
+        auto a = mt_provider_0.template GetIntegerAll<T>().a;
+        auto b = mt_provider_0.template GetIntegerAll<T>().b;
+        auto c = mt_provider_0.template GetIntegerAll<T>().c;
         EXPECT_EQ(a.size(), kNumberOfMts);
         EXPECT_EQ(b.size(), kNumberOfMts);
         EXPECT_EQ(c.size(), kNumberOfMts);
         for (std::size_t j = 1; j < motion_parties.size(); ++j) {
           const auto& mt_provider_j = motion_parties.at(j)->GetBackend()->GetMtProvider();
           for (std::size_t k = 0; k < a.size(); ++k) {
-            a.at(k) += mt_provider_j->template GetIntegerAll<T>().a.at(k);
-            b.at(k) += mt_provider_j->template GetIntegerAll<T>().b.at(k);
-            c.at(k) += mt_provider_j->template GetIntegerAll<T>().c.at(k);
+            a.at(k) += mt_provider_j.template GetIntegerAll<T>().a.at(k);
+            b.at(k) += mt_provider_j.template GetIntegerAll<T>().b.at(k);
+            c.at(k) += mt_provider_j.template GetIntegerAll<T>().c.at(k);
           }
         }
         for (std::size_t k = 0; k < a.size(); ++k) {

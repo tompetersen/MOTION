@@ -1,6 +1,6 @@
 // MIT License
 //
-// Copyright (c) 2019 Oleksandr Tkachenko, Lennart Braun
+// Copyright (c) 2019-2022 Oleksandr Tkachenko, Lennart Braun, Arianne Roselina Prananto
 // Cryptography and Privacy Engineering Group (ENCRYPTO)
 // TU Darmstadt, Germany
 //
@@ -33,6 +33,7 @@
 namespace encrypto::motion {
 
 struct AlgorithmDescription;
+class Backend;
 class FiberCondition;
 class Gate;
 using GatePointer = std::shared_ptr<Gate>;
@@ -61,41 +62,51 @@ class Register {
 
   std::size_t NextBooleanGmwSharingId(std::size_t number_of_parallel_values);
 
-  void RegisterNextGate(GatePointer gate);
+  template <typename T, typename... Args>
+  std::shared_ptr<T> EmplaceGate(Args&&... args) {
+    auto gate = std::make_shared<T>(std::forward<Args&&>(args)...);
+    RegisterGate(gate);
+    return gate;
+  }
 
-  void RegisterNextInputGate(GatePointer gate);
+  void RegisterGate(const GatePointer& gate);
+
+  template <typename T, typename... Args>
+  std::shared_ptr<T> EmplaceWire(Args&&... args) {
+    auto wire = std::make_shared<T>(std::forward<Args&&>(args)...);
+    RegisterWire(wire);
+    return wire;
+  }
+
+  void RegisterWire(const WirePointer& wire) { wires_.push_back(wire); }
 
   const GatePointer& GetGate(std::size_t gate_id) const {
     return gates_.at(gate_id - gate_id_offset_);
   }
 
-  const auto& GetInputGates() const { return input_gates_; }
-
   auto& GetGates() const { return gates_; }
 
-  void UnregisterGate(std::size_t gate_id) { gates_.at(gate_id) = nullptr; }
-
-  void RegisterNextWire(WirePointer wire) { wires_.push_back(wire); }
-
   WirePointer GetWire(std::size_t wire_id) const { return wires_.at(wire_id - wire_id_offset_); }
-
-  void UnregisterWire(std::size_t wire_id) { wires_.at(wire_id) = nullptr; }
-
-  void AddToActiveQueue(std::size_t gate_id);
-
-  void ClearActiveQueue();
-
-  std::int64_t GetNextGateFromActiveQueue();
 
   void IncrementEvaluatedGatesSetupCounter();
 
   void IncrementEvaluatedGatesOnlineCounter();
 
-  std::size_t GetNumberOfEvaluatedGateSetups() const { return evaluated_gates_setup_; }
+  void CheckSetupCondition();
 
-  std::size_t GetNumberOfEvaluatedGates() const { return evaluated_gates_online_; }
+  void CheckOnlineCondition();
+
+  std::size_t GetNumberOfGatesSetup() const { return gates_setup_; }
+
+  std::size_t GetNumberOfGatesOnline() const { return gates_online_; }
+
+  std::size_t GetNumberOfEvaluatedGatesSetup() const { return evaluated_gates_setup_; }
+
+  std::size_t GetNumberOfEvaluatedGatesOnline() const { return evaluated_gates_online_; }
 
   std::size_t GetTotalNumberOfGates() const { return global_gate_id_ - gate_id_offset_; }
+  
+  std::size_t GetGateIdOffset() const { return gate_id_offset_; }
 
   void Reset();
 
@@ -128,8 +139,11 @@ class Register {
   std::size_t global_arithmetic_gmw_sharing_id_ = 0, global_boolean_gmw_sharing_id_ = 0;
   std::size_t gate_id_offset_ = 0, wire_id_offset_ = 0;
 
-  std::atomic<std::size_t> evaluated_gates_online_ = 0;
+  std::atomic<std::size_t> gates_setup_ = 0;
+  std::atomic<std::size_t> gates_online_ = 0;
+
   std::atomic<std::size_t> evaluated_gates_setup_ = 0;
+  std::atomic<std::size_t> evaluated_gates_online_ = 0;
   // flags which should be changed to true as soon as the counters above reach
   // gates_.size(); need to be protected using the mutexes from the conditions below
   bool gates_setup_done_flag_ = false;
@@ -138,10 +152,6 @@ class Register {
   std::shared_ptr<FiberCondition> gates_setup_done_condition_;
   std::shared_ptr<FiberCondition> gates_online_done_condition_;
 
-  std::queue<std::size_t> active_gates_;
-  std::mutex active_queue_mutex_;
-
-  std::vector<GatePointer> input_gates_;
   std::vector<GatePointer> gates_;
 
   std::vector<WirePointer> wires_;

@@ -29,7 +29,6 @@
 #include "communication/communication_layer.h"
 #include "oblivious_transfer/base_ots/base_ot_provider.h"
 #include "oblivious_transfer/ot_flavors.h"
-#include "oblivious_transfer/ot_provider.h"
 #include "utility/block.h"
 
 class OtFlavorTest : public ::testing::Test {
@@ -41,22 +40,12 @@ class OtFlavorTest : public ::testing::Test {
     ot_provider_wrappers_.resize(2);
     for (std::size_t i = 0; i < 2; ++i) {
       base_ot_providers_[i] =
-          std::make_unique<encrypto::motion::BaseOtProvider>(*communication_layers_[i], nullptr);
+          std::make_unique<encrypto::motion::BaseOtProvider>(*communication_layers_[i]);
       motion_base_providers_[i] =
-          std::make_unique<encrypto::motion::BaseProvider>(*communication_layers_[i], nullptr);
+          std::make_unique<encrypto::motion::BaseProvider>(*communication_layers_[i]);
       ot_provider_wrappers_[i] = std::make_unique<encrypto::motion::OtProviderManager>(
-          *communication_layers_[i], *base_ot_providers_[i], *motion_base_providers_[i], nullptr);
+          *communication_layers_[i], *base_ot_providers_[i], *motion_base_providers_[i]);
     }
-
-    std::vector<std::future<void>> futures;
-    for (std::size_t i = 0; i < 2; ++i) {
-      futures.emplace_back(std::async(std::launch::async, [this, i] {
-        communication_layers_[i]->Start();
-        motion_base_providers_[i]->Setup();
-        base_ot_providers_[i]->ComputeBaseOts();
-      }));
-    }
-    std::for_each(std::begin(futures), std::end(futures), [](auto& f) { f.get(); });
   }
 
   void TearDown() override {
@@ -77,7 +66,23 @@ class OtFlavorTest : public ::testing::Test {
   }
 
   void RunOtExtensionSetup() {
+    for (std::size_t i = 0; i < 2; ++i) {
+      ot_provider_wrappers_[i]->PreSetup();
+      base_ot_providers_[i]->PreSetup();
+    }
+
     std::vector<std::future<void>> futures;
+    for (std::size_t i = 0; i < 2; ++i) {
+      futures.emplace_back(std::async(std::launch::async, [this, i] {
+        communication_layers_[i]->Start();
+        communication_layers_[i]->Synchronize();
+        motion_base_providers_[i]->Setup();
+        base_ot_providers_[i]->ComputeBaseOts();
+      }));
+    }
+    std::for_each(std::begin(futures), std::end(futures), [](auto& f) { f.get(); });
+
+    futures.clear();
     for (std::size_t i = 0; i < 2; ++i) {
       futures.emplace_back(std::async(std::launch::async, [this, i] {
         ot_provider_wrappers_[i]->GetProvider(1 - i).SendSetup();
@@ -121,9 +126,9 @@ TEST_F(OtFlavorTest, FixedXcOt128) {
 
   for (std::size_t ot_i = 0; ot_i < kNumberOfOts; ++ot_i) {
     if (choice_bits.Get(ot_i)) {
-      ASSERT_EQ(receiver_output[ot_i], sender_output[ot_i] ^ correlation);
+      EXPECT_TRUE(receiver_output[ot_i] == (sender_output[ot_i] ^ correlation));
     } else {
-      ASSERT_EQ(receiver_output[ot_i], sender_output[ot_i]);
+      EXPECT_TRUE(receiver_output[ot_i] == sender_output[ot_i]);
     }
   }
 }
@@ -164,22 +169,26 @@ TYPED_TEST(AcOtTest, AcOt) {
   constexpr std::size_t kNumberOfOts = 1000;
   const auto correlations = encrypto::motion::RandomVector<TypeParam>(kNumberOfOts);
   const auto choice_bits = encrypto::motion::BitVector<>::SecureRandom(kNumberOfOts);
-  auto ot_sender = this->GetSenderProvider().template RegisterSendAcOt<TypeParam>(kNumberOfOts);
+  auto ot_sender = this->GetSenderProvider().RegisterSendAcOt(kNumberOfOts, sizeof(TypeParam) * 8);
   auto ot_receiver =
-      this->GetReceiverProvider().template RegisterReceiveAcOt<TypeParam>(kNumberOfOts);
+      this->GetReceiverProvider().RegisterReceiveAcOt(kNumberOfOts, sizeof(TypeParam) * 8);
+
+  auto casted_ot_sender{dynamic_cast<encrypto::motion::AcOtSender<TypeParam>*>(ot_sender.get())};
+  auto casted_ot_receiver{
+      dynamic_cast<encrypto::motion::AcOtReceiver<TypeParam>*>(ot_receiver.get())};
 
   this->RunOtExtensionSetup();
 
-  ot_sender->SetCorrelations(correlations);
-  ot_sender->SendMessages();
+  casted_ot_sender->SetCorrelations(correlations);
+  casted_ot_sender->SendMessages();
 
-  ot_receiver->SetChoices(choice_bits);
-  ot_receiver->SendCorrections();
+  casted_ot_receiver->SetChoices(choice_bits);
+  casted_ot_receiver->SendCorrections();
 
-  ot_sender->ComputeOutputs();
-  ot_receiver->ComputeOutputs();
-  const auto sender_output = ot_sender->GetOutputs();
-  const auto receiver_output = ot_receiver->GetOutputs();
+  casted_ot_sender->ComputeOutputs();
+  casted_ot_receiver->ComputeOutputs();
+  const auto sender_output = casted_ot_sender->GetOutputs();
+  const auto receiver_output = casted_ot_receiver->GetOutputs();
 
   EXPECT_EQ(sender_output.size(), kNumberOfOts);
   EXPECT_EQ(receiver_output.size(), kNumberOfOts);
@@ -199,22 +208,26 @@ TYPED_TEST(AcOtTest, VectorAcOt) {
   const auto correlations = encrypto::motion::RandomVector<TypeParam>(kNumberOfOts * kVectorSize);
   const auto choice_bits = encrypto::motion::BitVector<>::SecureRandom(kNumberOfOts);
   auto ot_sender =
-      this->GetSenderProvider().template RegisterSendAcOt<TypeParam>(kNumberOfOts, kVectorSize);
-  auto ot_receiver = this->GetReceiverProvider().template RegisterReceiveAcOt<TypeParam>(
-      kNumberOfOts, kVectorSize);
+      this->GetSenderProvider().RegisterSendAcOt(kNumberOfOts, sizeof(TypeParam) * 8, kVectorSize);
+  auto ot_receiver = this->GetReceiverProvider().RegisterReceiveAcOt(
+      kNumberOfOts, sizeof(TypeParam) * 8, kVectorSize);
+
+  auto casted_ot_sender{dynamic_cast<encrypto::motion::AcOtSender<TypeParam>*>(ot_sender.get())};
+  auto casted_ot_receiver{
+      dynamic_cast<encrypto::motion::AcOtReceiver<TypeParam>*>(ot_receiver.get())};
 
   this->RunOtExtensionSetup();
 
-  ot_sender->SetCorrelations(correlations);
-  ot_sender->SendMessages();
+  casted_ot_sender->SetCorrelations(correlations);
+  casted_ot_sender->SendMessages();
 
-  ot_receiver->SetChoices(choice_bits);
-  ot_receiver->SendCorrections();
+  casted_ot_receiver->SetChoices(choice_bits);
+  casted_ot_receiver->SendCorrections();
 
-  ot_sender->ComputeOutputs();
-  ot_receiver->ComputeOutputs();
-  const auto sender_output = ot_sender->GetOutputs();
-  const auto receiver_output = ot_receiver->GetOutputs();
+  casted_ot_sender->ComputeOutputs();
+  casted_ot_receiver->ComputeOutputs();
+  const auto sender_output = casted_ot_sender->GetOutputs();
+  const auto receiver_output = casted_ot_receiver->GetOutputs();
 
   EXPECT_EQ(sender_output.size(), kNumberOfOts * kVectorSize);
   EXPECT_EQ(receiver_output.size(), kNumberOfOts * kVectorSize);
@@ -254,9 +267,9 @@ TEST_F(OtFlavorTest, GOt128) {
 
   for (std::size_t ot_i = 0; ot_i < kNumberOfOts; ++ot_i) {
     if (choice_bits.Get(ot_i)) {
-      ASSERT_EQ(receiver_output[ot_i], sender_input[2 * ot_i + 1]);
+      EXPECT_TRUE(receiver_output[ot_i] == sender_input[2 * ot_i + 1]);
     } else {
-      ASSERT_EQ(receiver_output[ot_i], sender_input[2 * ot_i]);
+      EXPECT_TRUE(receiver_output[ot_i] == sender_input[2 * ot_i]);
     }
   }
 }
